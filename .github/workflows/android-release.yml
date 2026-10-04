@@ -1,0 +1,110 @@
+name: StorePOS GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: "Release tag, e.g. v2.2.0"
+        required: true
+        type: string
+  push:
+    branches:
+      - "publish/v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: motopos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release name
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RELEASE_NAME="${{ inputs.release_name }}"
+          else
+            RELEASE_NAME="${GITHUB_REF_NAME#publish/}"
+          fi
+          test -n "$RELEASE_NAME"
+          echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Restore stable StorePOS update signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: storepos-debug-keystore-v1
+
+      - name: Create stable StorePOS update signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=StorePOS Internal,O=StorePOS,C=PH"
+          fi
+
+      - name: Quality checks
+        run: gradle :app:testDebugUnitTest :app:lintDebug --stacktrace
+
+      - name: Build update APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "StorePOS-${RELEASE_NAME}.apk"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StorePOS-${{ env.RELEASE_NAME }}-apk
+          path: StorePOS-${{ env.RELEASE_NAME }}.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_NAME" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_NAME" "StorePOS-${RELEASE_NAME}.apk" --clobber
+          else
+            gh release create "$RELEASE_NAME" \
+              "StorePOS-${RELEASE_NAME}.apk" \
+              --target "$GITHUB_SHA" \
+              --title "StorePOS $RELEASE_NAME" \
+              --notes-file RELEASE_NOTES.md
+          fi
