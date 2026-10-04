@@ -16,8 +16,8 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/ic_motopos_logo"
-        android:roundIcon="@drawable/ic_motopos_logo"
+        android:icon="@drawable/ic_storepos_logo"
+        android:roundIcon="@drawable/ic_storepos_logo"
         android:label="StorePOS"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
