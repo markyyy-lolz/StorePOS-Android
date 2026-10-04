@@ -35,7 +35,7 @@ object StoreRepository {
     suspend fun signUp(displayName: String, email: String, password: String) {
         client.auth.signUpWith(
             Email,
-            redirectUrl = "https://markyyy-lolz.github.io/StorePOS-Web/?email-confirmed=1"
+            redirectUrl = "https://markyyy-lolz.github.io/StorePOS-Web/#/confirm-email"
         ) {
             this.email = email.trim()
             this.password = password
