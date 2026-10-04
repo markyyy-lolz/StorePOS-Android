@@ -1,0 +1,1000 @@
+package com.storepos.app.ui.screens
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.unit.dp
+import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.model.*
+import com.storepos.app.ui.components.*
+import com.storepos.app.printing.BluetoothReceiptPrinter
+import com.storepos.app.printing.PrinterDevice
+import com.storepos.app.printing.ReceiptPrinter
+import com.storepos.app.printing.UsbReceiptPrinter
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import java.util.UUID
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+
+@Composable
+fun PosPage(context: ShopContext) {
+    var products by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
+    var motorcycles by remember { mutableStateOf<List<Motorcycle>>(emptyList()) }
+    var settings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
+    var shifts by remember { mutableStateOf<List<CashierShift>>(emptyList()) }
+    var heldSales by remember { mutableStateOf<List<HeldSale>>(emptyList()) }
+
+    var cart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var checkout by remember { mutableStateOf(false) }
+    var priceProduct by remember { mutableStateOf<Product?>(null) }
+    var cartEditorOpen by remember { mutableStateOf(false) }
+    var holdOpen by remember { mutableStateOf(false) }
+    var recallOpen by remember { mutableStateOf(false) }
+    var startShiftOpen by remember { mutableStateOf(false) }
+
+    var lastSale by remember { mutableStateOf<Sale?>(null) }
+    var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
+    var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
+    var printing by remember { mutableStateOf(false) }
+    var printMessage by remember { mutableStateOf<String?>(null) }
+
+    var offlineMode by remember { mutableStateOf(false) }
+    var offlineQueued by remember { mutableStateOf<Double?>(null) }
+    var pendingCount by remember { mutableStateOf(0) }
+    var syncingOffline by remember { mutableStateOf(false) }
+
+    val scope = rememberCoroutineScope()
+    val androidContext = LocalContext.current
+    val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
+    val offlineStore = remember { OfflineStore(androidContext) }
+
+    val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val code = result.contents?.trim().orEmpty()
+        if (code.isNotBlank()) {
+            val product = products.firstOrNull {
+                it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
+            }
+            if (product != null) {
+                cart = addLine(cart, product)
+                query = ""
+                error = null
+            } else {
+                query = code
+                error = "Barcode not found in inventory: " + code
+            }
+        }
+    }
+
+    fun scanBarcode() {
+        barcodeLauncher.launch(
+            ScanOptions()
+                .setPrompt("Scan product barcode")
+                .setBeepEnabled(true)
+                .setOrientationLocked(false)
+        )
+    }
+
+    suspend fun refresh() {
+        try {
+            coroutineScope {
+                val p = async { StoreRepository.products(context.shop.id) }
+                val c = async { StoreRepository.customers(context.shop.id) }
+                val m = async { StoreRepository.motorcycles(context.shop.id) }
+                val s = async { StoreRepository.shopSettings(context.shop.id) }
+                val sh = async { StoreRepository.cashierShifts(context.shop.id) }
+                val h = async { StoreRepository.heldSales(context.shop.id) }
+                products = p.await()
+                customers = c.await()
+                motorcycles = m.await()
+                settings = s.await()
+                shifts = sh.await()
+                heldSales = h.await()
+            }
+            offlineStore.saveProducts(context.shop.id, products)
+            offlineStore.saveCustomers(context.shop.id, customers)
+            offlineStore.saveMotorcycles(context.shop.id, motorcycles)
+
+            val open = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
+            prefs.edit().apply {
+                if (open != null) putString("open_shift_" + context.shop.id, open.id)
+                else remove("open_shift_" + context.shop.id)
+            }.apply()
+            offlineMode = false
+        } catch (cloudError: Throwable) {
+            products = offlineStore.loadProducts(context.shop.id)
+            customers = offlineStore.loadCustomers(context.shop.id)
+            motorcycles = offlineStore.loadMotorcycles(context.shop.id)
+            offlineMode = true
+            if (products.isEmpty()) throw cloudError
+        }
+        pendingCount = offlineStore.pendingSales().size
+    }
+
+    suspend fun syncOfflineSales() {
+        syncingOffline = true
+        val pending = offlineStore.pendingSales()
+        pending.forEach { queued ->
+            runCatching { StoreRepository.completeOfflineSale(queued.payload) }
+                .onSuccess { offlineStore.removePendingSale(queued.id) }
+                .onFailure { offlineStore.setPendingError(queued.id, StoreRepository.userMessage(it)) }
+        }
+        pendingCount = offlineStore.pendingSales().size
+        syncingOffline = false
+        if (pendingCount == 0 && pending.isNotEmpty()) {
+            error = null
+            runCatching { refresh() }
+        }
+    }
+
+    suspend fun printSale(
+        sale: Sale,
+        soldCart: List<CartLine>,
+        payments: List<CheckoutPayment>
+    ): String {
+        val address = prefs.getString("printer_address", null)
+            ?: return "No receipt printer selected."
+        val printerName = prefs.getString("printer_name", "Receipt printer") ?: "Receipt printer"
+        val paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm)
+        val transport = prefs.getString("printer_transport", "bluetooth") ?: "bluetooth"
+
+        if (transport == "usb" && !UsbReceiptPrinter.hasPermission(androidContext, address)) {
+            UsbReceiptPrinter.requestPermission(androidContext, address)
+            return "USB printer permission is required. Approve it in Android, then print again."
+        }
+
+        val printer: ReceiptPrinter = if (transport == "usb") {
+            UsbReceiptPrinter(androidContext)
+        } else {
+            BluetoothReceiptPrinter(androidContext)
+        }
+        val result = printer.connect(PrinterDevice(printerName, address, transport)).fold(
+            onSuccess = {
+                printer.printReceipt(
+                    BluetoothReceiptPrinter.saleReceipt(
+                        shopName = context.shop.name,
+                        sale = sale,
+                        cart = soldCart,
+                        paperWidth = paperWidth,
+                        receiptHeader = settings.receiptHeader,
+                        receiptFooter = settings.receiptFooter,
+                        payments = payments,
+                        cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
+                        openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" }
+                    )
+                )
+            },
+            onFailure = { Result.failure(it) }
+        )
+        printer.disconnect()
+        return result.fold(
+            onSuccess = { "Receipt sent to printer." },
+            onFailure = { it.message ?: "Unable to print receipt." }
+        )
+    }
+
+    LaunchedEffect(context.shop.id) {
+        runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
+        if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
+        loading = false
+    }
+
+    if (loading) return LoadingView("Opening POS…")
+
+    val visible = products.filter {
+        it.isActive && (query.isBlank() ||
+            it.name.contains(query, true) ||
+            it.sku.contains(query, true) ||
+            it.barcode?.contains(query, true) == true ||
+            it.brand?.contains(query, true) == true)
+    }
+    val openShift = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
+    val cachedOpenShift = prefs.getString("open_shift_" + context.shop.id, null)
+    val registerOpen = !settings.requireCashierShift ||
+        openShift != null ||
+        (offlineMode && !cachedOpenShift.isNullOrBlank())
+    val cashierRole = context.member.role.lowercase() == "cashier"
+
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        PageHeader(
+            "Point of Sale",
+            if (offlineMode)
+                "Offline mode • cached catalog • queued transactions sync when online"
+            else
+                "Production register • scan, hold, split tender & receipt printing",
+            action = {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (offlineMode) {
+                        AssistChip(onClick = {}, label = { Text("OFFLINE") })
+                    } else {
+                        AssistChip(
+                            onClick = {},
+                            label = { Text(if (registerOpen) "REGISTER OPEN" else "SHIFT REQUIRED") },
+                            leadingIcon = {
+                                Icon(
+                                    if (registerOpen) Icons.Rounded.PointOfSale else Icons.Rounded.LockClock,
+                                    contentDescription = null
+                                )
+                            }
+                        )
+                    }
+                    if (heldSales.isNotEmpty()) {
+                        OutlinedButton(onClick = { recallOpen = true }) {
+                            Icon(Icons.Rounded.Restore, null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Held " + heldSales.size)
+                        }
+                    }
+                    if (pendingCount > 0) {
+                        Button(
+                            onClick = { scope.launch { syncOfflineSales() } },
+                            enabled = !syncingOffline && registerOpen
+                        ) {
+                            Text(if (syncingOffline) "Syncing…" else "Sync " + pendingCount)
+                        }
+                    }
+                }
+            }
+        )
+
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        if (!registerOpen) {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.LockClock, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Cashier shift required", fontWeight = FontWeight.Black)
+                        Text(
+                            "Open a register shift before checkout so cash, refunds, variance, and Z-report stay accountable.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(onClick = { startShiftOpen = true }, enabled = !offlineMode) {
+                        Text("Start shift")
+                    }
+                }
+            }
+        }
+
+        BoxWithConstraints(Modifier.weight(1f)) {
+            if (maxWidth >= 800.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ProductList(
+                        visible,
+                        query,
+                        { query = it },
+                        { cart = addLine(cart, it) },
+                        { scanBarcode() },
+                        Modifier.weight(1.3f)
+                    )
+                    CartCard(
+                        cart = cart,
+                        onQty = { p, d -> cart = changeQty(cart, p, d) },
+                        onOverride = { priceProduct = it },
+                        onHold = { if (cart.isNotEmpty()) holdOpen = true },
+                        onCheckout = { checkout = true },
+                        checkoutEnabled = cart.isNotEmpty() && registerOpen,
+                        holdEnabled = settings.allowHoldSales && cart.isNotEmpty() && !offlineMode,
+                        modifier = Modifier.weight(.9f)
+                    )
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ProductList(
+                        visible,
+                        query,
+                        { query = it },
+                        { cart = addLine(cart, it) },
+                        { scanBarcode() },
+                        Modifier.weight(1f)
+                    )
+                    Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 3.dp) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(cart.sumOf { it.quantity }.toInt().toString() + " item(s)")
+                                Text(money(cart.sumOf { it.lineTotal }), fontWeight = FontWeight.Black)
+                            }
+                            OutlinedButton(onClick = { cartEditorOpen = true }, enabled = cart.isNotEmpty()) {
+                                Text("Cart")
+                            }
+                            if (settings.allowHoldSales && !offlineMode) {
+                                OutlinedButton(onClick = { holdOpen = true }, enabled = cart.isNotEmpty()) {
+                                    Text("Hold")
+                                }
+                            }
+                            Button(
+                                onClick = { checkout = true },
+                                enabled = cart.isNotEmpty() && registerOpen
+                            ) {
+                                Text("Checkout")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    priceProduct?.let { product ->
+        val line = cart.firstOrNull { it.product.id == product.id }
+        PriceOverrideDialog(
+            product = product,
+            currentPrice = line?.unitPrice ?: product.sellingPrice,
+            onDismiss = { priceProduct = null },
+            onApply = { newPrice ->
+                cart = cart.map {
+                    if (it.product.id == product.id) {
+                        it.copy(
+                            unitPriceOverride = if (kotlin.math.abs(newPrice - product.sellingPrice) < .01)
+                                null else newPrice
+                        )
+                    } else it
+                }
+                priceProduct = null
+            }
+        )
+    }
+
+    if (cartEditorOpen) {
+        CartEditorDialog(
+            cart = cart,
+            onDismiss = { cartEditorOpen = false },
+            onQty = { product, delta -> cart = changeQty(cart, product, delta) },
+            onOverride = { product ->
+                cartEditorOpen = false
+                priceProduct = product
+            }
+        )
+    }
+
+    if (startShiftOpen) {
+        PosStartShiftDialog(
+            onDismiss = { startShiftOpen = false },
+            onStart = { opening ->
+                scope.launch {
+                    error = null
+                    runCatching { StoreRepository.startCashierShift(context.shop.id, opening) }
+                        .onSuccess { shift ->
+                            prefs.edit().putString("open_shift_" + context.shop.id, shift.id).apply()
+                            startShiftOpen = false
+                            refresh()
+                        }
+                        .onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
+    if (holdOpen) {
+        HoldCartDialog(
+            onDismiss = { holdOpen = false },
+            onHold = { label, notes ->
+                scope.launch {
+                    error = null
+                    runCatching {
+                        StoreRepository.holdSale(
+                            shopId = context.shop.id,
+                            cart = cart,
+                            label = label,
+                            notes = notes
+                        )
+                    }.onSuccess {
+                        cart = emptyList()
+                        holdOpen = false
+                        refresh()
+                    }.onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
+    if (recallOpen) {
+        RecallHeldSaleDialog(
+            heldSales = heldSales,
+            onDismiss = { recallOpen = false },
+            onRecall = { held ->
+                val restored = held.items.mapNotNull { item ->
+                    products.firstOrNull { it.id == item.productId }?.let {
+                        CartLine(it, item.quantity, item.unitPriceOverride)
+                    }
+                }
+                if (restored.isEmpty()) {
+                    error = "This held sale no longer has available products."
+                } else {
+                    cart = restored
+                    recallOpen = false
+                    scope.launch {
+                        runCatching { StoreRepository.deleteHeldSale(held.id) }
+                            .onFailure { error = StoreRepository.userMessage(it) }
+                        refresh()
+                    }
+                }
+            },
+            onDelete = { held ->
+                scope.launch {
+                    runCatching { StoreRepository.deleteHeldSale(held.id) }
+                        .onSuccess { refresh() }
+                        .onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
+    lastSale?.let { sale ->
+        AlertDialog(
+            onDismissRequest = { lastSale = null },
+            icon = {
+                Icon(
+                    Icons.Rounded.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = { Text("Transaction Complete", fontWeight = FontWeight.Black) },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Payment and inventory were committed successfully.")
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Sale number")
+                                Text(sale.saleNumber, fontWeight = FontWeight.Bold)
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Total")
+                                Text(
+                                    money(sale.totalAmount),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Black,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (sale.changeDue != null && sale.changeDue > 0) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Change")
+                                    Text(money(sale.changeDue), fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                    printMessage?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            confirmButton = {
+                val printerAddress = prefs.getString("printer_address", null)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            printing = true
+                            printMessage = null
+                            scope.launch {
+                                printMessage = printSale(sale, lastReceiptCart, lastPayments)
+                                printing = false
+                            }
+                        },
+                        enabled = printerAddress != null && !printing,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Print, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (printing) "Printing…" else "Print receipt")
+                    }
+                    Button(
+                        onClick = {
+                            lastSale = null
+                            lastReceiptCart = emptyList()
+                            lastPayments = emptyList()
+                            printMessage = null
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Done") }
+                }
+            },
+            shape = RoundedCornerShape(28.dp)
+        )
+    }
+
+    offlineQueued?.let { provisional ->
+        AlertDialog(
+            onDismissRequest = { offlineQueued = null },
+            icon = { Icon(Icons.Rounded.CloudOff, null, modifier = Modifier.size(44.dp)) },
+            title = { Text("Sale saved offline", fontWeight = FontWeight.Black) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Stored on this device. It becomes a final StorePOS transaction only after cloud sync succeeds.")
+                    Text("Provisional total: " + money(provisional), fontWeight = FontWeight.Bold)
+                    Text(
+                        "Pending sync: " + pendingCount + ". Keep this cashier shift open until all queued sales sync.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = { Button(onClick = { offlineQueued = null }) { Text("Done") } }
+        )
+    }
+
+    if (checkout) {
+        PosCheckoutDialog(
+            cart = cart,
+            customers = customers,
+            motorcycles = motorcycles,
+            settings = settings,
+            cashierRole = cashierRole,
+            hasPriceOverride = cart.any { it.hasPriceOverride },
+            offlineMode = offlineMode,
+            onDismiss = { checkout = false },
+            onComplete = { customerId, bikeId, payments, discount, tax, managerPin ->
+                scope.launch {
+                    error = null
+                    val soldCart = cart
+                    runCatching {
+                        StoreRepository.completeSaleV3(
+                            shopId = context.shop.id,
+                            customerId = customerId,
+                            motorcycleId = bikeId,
+                            jobOrderId = null,
+                            cart = soldCart,
+                            discount = discount,
+                            tax = tax,
+                            payments = payments,
+                            managerPin = managerPin
+                        )
+                    }.onSuccess { sale ->
+                        lastReceiptCart = soldCart
+                        lastPayments = payments
+                        lastSale = sale
+                        cart = emptyList()
+                        checkout = false
+                        refresh()
+
+                        if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
+                            printing = true
+                            printMessage = printSale(sale, soldCart, payments)
+                            printing = false
+                        }
+                    }.onFailure { failure ->
+                        val lower = failure.message.orEmpty().lowercase()
+                        val networkFailure = offlineMode ||
+                            "network" in lower ||
+                            "timeout" in lower ||
+                            "unable to resolve host" in lower ||
+                            "failed to connect" in lower ||
+                            "connectexception" in lower
+
+                        if (networkFailure) {
+                            if (managerPin != null) {
+                                error = "Manager-approved transactions cannot be queued offline. Reconnect and retry."
+                                return@onFailure
+                            }
+                            if (payments.any { it.method in listOf("store_credit","credit") }) {
+                                error = "Store credit and customer credit require an online connection."
+                                return@onFailure
+                            }
+
+                            val provisionalTotal = soldCart.sumOf { it.lineTotal } - discount + tax
+                            val first = payments.first()
+                            offlineStore.enqueueSale(
+                                OfflineSalePayload(
+                                    clientKey = UUID.randomUUID().toString(),
+                                    shopId = context.shop.id,
+                                    customerId = customerId,
+                                    motorcycleId = bikeId,
+                                    discountAmount = discount,
+                                    taxAmount = tax,
+                                    amountTendered = first.tendered,
+                                    paymentMethod = first.method,
+                                    referenceNumber = first.referenceNumber,
+                                    items = soldCart.map {
+                                        SaleRpcItem(it.product.id, it.quantity, it.unitPriceOverride)
+                                    },
+                                    payments = payments
+                                )
+                            )
+
+                            products = products.map { product ->
+                                val line = soldCart.firstOrNull { it.product.id == product.id }
+                                if (line != null && product.trackStock) {
+                                    product.copy(
+                                        stockQuantity = (product.stockQuantity - line.quantity).coerceAtLeast(0.0)
+                                    )
+                                } else product
+                            }
+                            offlineStore.saveProducts(context.shop.id, products)
+
+                            offlineQueued = provisionalTotal
+                            pendingCount = offlineStore.pendingSales().size
+                            cart = emptyList()
+                            checkout = false
+                            offlineMode = true
+                            error = null
+                        } else {
+                            error = StoreRepository.userMessage(failure)
+                        }
+                    }
+                }
+            }
+        )
+    }
+}
+
+private fun addLine(cart: List<CartLine>, product: Product): List<CartLine> =
+    if (cart.none { it.product.id == product.id }) cart + CartLine(product)
+    else cart.map { if (it.product.id == product.id) it.copy(quantity = it.quantity + 1) else it }
+
+private fun changeQty(cart: List<CartLine>, product: Product, delta: Double): List<CartLine> =
+    cart.mapNotNull {
+        if (it.product.id != product.id) it
+        else (it.quantity + delta).let { q -> if (q <= 0) null else it.copy(quantity = q) }
+    }
+
+@Composable
+private fun ProductList(
+    products: List<Product>,
+    query: String,
+    onQuery: (String) -> Unit,
+    onAdd: (Product) -> Unit,
+    onScan: () -> Unit,
+    modifier: Modifier
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        OutlinedTextField(
+            query,
+            onQuery,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text("Search name, SKU, barcode or brand") },
+            leadingIcon = { Icon(Icons.Rounded.Search, null) },
+            trailingIcon = {
+                IconButton(onClick = onScan) {
+                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan barcode")
+                }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )
+        if (products.isEmpty()) {
+            EmptyView("No products found", "Add products in Inventory or change the search.", Modifier.weight(1f))
+        } else {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(products, key = { it.id }) { p ->
+                    Card(
+                        Modifier.fillMaxWidth().clickable { onAdd(p) },
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name, fontWeight = FontWeight.Bold)
+                                Text(
+                                    listOfNotNull(p.brand, p.sku).joinToString(" • "),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "Stock " + p.stockQuantity + " " + p.unit,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Text(money(p.sellingPrice), fontWeight = FontWeight.Black)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CartCard(
+    cart: List<CartLine>,
+    onQty: (Product, Double) -> Unit,
+    onOverride: (Product) -> Unit,
+    onHold: () -> Unit,
+    onCheckout: () -> Unit,
+    checkoutEnabled: Boolean,
+    holdEnabled: Boolean,
+    modifier: Modifier
+) {
+    MotoCard(modifier.fillMaxHeight()) {
+        Text("Current sale", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        if (cart.isEmpty()) {
+            EmptyView("Cart is empty", "Choose a product to start a transaction.", Modifier.weight(1f))
+        } else {
+            LazyColumn(Modifier.weight(1f)) {
+                items(cart, key = { it.product.id }) { line ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(line.product.name)
+                            Text(
+                                money(line.lineTotal) + " • " + money(line.unitPrice) + " each" +
+                                    if (line.hasPriceOverride) " • OVERRIDE" else "",
+                                color = if (line.hasPriceOverride) MaterialTheme.colorScheme.tertiary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(onClick = { onOverride(line.product) }) {
+                            Icon(Icons.Rounded.PriceChange, contentDescription = "Override price")
+                        }
+                        IconButton(onClick = { onQty(line.product, -1.0) }) {
+                            Icon(Icons.Rounded.Remove, null)
+                        }
+                        Text(line.quantity.toInt().toString(), fontWeight = FontWeight.Bold)
+                        IconButton(onClick = { onQty(line.product, 1.0) }) {
+                            Icon(Icons.Rounded.Add, null)
+                        }
+                    }
+                    HorizontalDivider()
+                }
+            }
+            Text(
+                money(cart.sumOf { it.lineTotal }),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Black
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onHold,
+                    enabled = holdEnabled,
+                    modifier = Modifier.weight(1f).height(52.dp)
+                ) {
+                    Icon(Icons.Rounded.PauseCircle, null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Hold")
+                }
+                Button(
+                    onClick = onCheckout,
+                    enabled = checkoutEnabled,
+                    modifier = Modifier.weight(1f).height(52.dp)
+                ) {
+                    Text("Checkout")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PriceOverrideDialog(
+    product: Product,
+    currentPrice: Double,
+    onDismiss: () -> Unit,
+    onApply: (Double) -> Unit
+) {
+    var price by remember(product.id) { mutableStateOf(currentPrice.toString()) }
+    val value = price.toDoubleOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Price override") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(product.name, fontWeight = FontWeight.Bold)
+                Text("Regular price: " + money(product.sellingPrice))
+                OutlinedTextField(
+                    price,
+                    { price = it },
+                    label = { Text("Selling price for this sale") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Text(
+                    "Cashier overrides require Manager PIN approval at checkout.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { value?.let(onApply) }, enabled = value != null && value >= 0) {
+                Text("Apply")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onApply(product.sellingPrice) }) { Text("Reset") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun CartEditorDialog(
+    cart: List<CartLine>,
+    onDismiss: () -> Unit,
+    onQty: (Product, Double) -> Unit,
+    onOverride: (Product) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Current sale") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(cart, key = { it.product.id }) { line ->
+                    Surface(tonalElevation = 2.dp, shape = RoundedCornerShape(12.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(line.product.name, fontWeight = FontWeight.Bold)
+                                Text(
+                                    money(line.unitPrice) + " each" +
+                                        if (line.hasPriceOverride) " • OVERRIDE" else "",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            IconButton(onClick = { onOverride(line.product) }) {
+                                Icon(Icons.Rounded.PriceChange, contentDescription = "Override price")
+                            }
+                            IconButton(onClick = { onQty(line.product, -1.0) }) {
+                                Icon(Icons.Rounded.Remove, contentDescription = "Decrease")
+                            }
+                            Text(line.quantity.toInt().toString(), fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { onQty(line.product, 1.0) }) {
+                                Icon(Icons.Rounded.Add, contentDescription = "Increase")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("Done") } }
+    )
+}
+
+@Composable
+private fun PosStartShiftDialog(
+    onDismiss: () -> Unit,
+    onStart: (Double) -> Unit
+) {
+    var opening by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Open cashier shift") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Count the starting cash in the drawer before accepting transactions.")
+                OutlinedTextField(
+                    opening,
+                    { opening = it },
+                    label = { Text("Opening cash") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onStart(opening.toDoubleOrNull() ?: 0.0) },
+                enabled = (opening.toDoubleOrNull() ?: -1.0) >= 0
+            ) { Text("Open register") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun HoldCartDialog(
+    onDismiss: () -> Unit,
+    onHold: (String?, String?) -> Unit
+) {
+    var label by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Hold / park sale") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("The cart will be saved without changing stock until checkout.")
+                OutlinedTextField(
+                    label,
+                    { label = it },
+                    label = { Text("Label / customer name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    notes,
+                    { notes = it },
+                    label = { Text("Notes (optional)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onHold(label.trim().ifBlank { null }, notes.trim().ifBlank { null }) }) {
+                Text("Hold sale")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun RecallHeldSaleDialog(
+    heldSales: List<HeldSale>,
+    onDismiss: () -> Unit,
+    onRecall: (HeldSale) -> Unit,
+    onDelete: (HeldSale) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Held sales") },
+        text = {
+            if (heldSales.isEmpty()) {
+                Text("No held sales.")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 480.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(heldSales, key = { it.id }) { held ->
+                        Surface(
+                            tonalElevation = 2.dp,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(held.label ?: "Held sale", fontWeight = FontWeight.Bold)
+                                    Text(
+                                        held.items.sumOf { it.quantity }.toInt().toString() + " item(s)",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    held.notes?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                }
+                                TextButton(onClick = { onRecall(held) }) { Text("Recall") }
+                                IconButton(onClick = { onDelete(held) }) {
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete held sale")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
