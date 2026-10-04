@@ -71,7 +71,7 @@ fun AlertsPage(
                 @Suppress("DEPRECATION")
                 android.app.Notification.Builder(androidContext)
             }
-                .setSmallIcon(R.drawable.ic_motopos_logo)
+                .setSmallIcon(R.drawable.ic_storepos_logo)
                 .setContentTitle(if (important.size == 1) first.title else "${important.size} StorePOS alerts need attention")
                 .setContentText(first.message.take(120))
                 .setAutoCancel(true)
