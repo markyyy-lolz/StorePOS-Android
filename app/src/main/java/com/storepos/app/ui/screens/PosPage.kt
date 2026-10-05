@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -40,12 +41,18 @@ fun PosPage(context: ShopContext) {
     var settings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var shifts by remember { mutableStateOf<List<CashierShift>>(emptyList()) }
     var heldSales by remember { mutableStateOf<List<HeldSale>>(emptyList()) }
+    var retailSerials by remember { mutableStateOf<List<RetailSerial>>(emptyList()) }
+    var retailPromos by remember { mutableStateOf<List<RetailPromo>>(emptyList()) }
 
     var cart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var checkout by remember { mutableStateOf(false) }
+    var retailQuote by remember { mutableStateOf<RetailQuote?>(null) }
+    var preparingCheckout by remember { mutableStateOf(false) }
+    var serialCheckoutProduct by remember { mutableStateOf<Product?>(null) }
+    var quantityProduct by remember { mutableStateOf<Product?>(null) }
     var priceProduct by remember { mutableStateOf<Product?>(null) }
     var cartEditorOpen by remember { mutableStateOf(false) }
     var holdOpen by remember { mutableStateOf(false) }
@@ -55,6 +62,7 @@ fun PosPage(context: ShopContext) {
     var lastSale by remember { mutableStateOf<Sale?>(null) }
     var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
+    var lastReceiptToken by remember { mutableStateOf<String?>(null) }
     var printing by remember { mutableStateOf(false) }
     var printMessage by remember { mutableStateOf<String?>(null) }
 
@@ -75,7 +83,8 @@ fun PosPage(context: ShopContext) {
                 it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
             }
             if (product != null) {
-                cart = addLine(cart, product)
+                if (product.isWeighed) quantityProduct = product
+                else cart = addLine(cart, product)
                 query = ""
                 error = null
             } else {
@@ -103,12 +112,16 @@ fun PosPage(context: ShopContext) {
                 val s = async { StoreRepository.shopSettings(context.shop.id) }
                 val sh = async { StoreRepository.cashierShifts(context.shop.id) }
                 val h = async { StoreRepository.heldSales(context.shop.id) }
+                val rs = async { RetailRepository.serials(context.shop.id) }
+                val rp = async { RetailRepository.promos(context.shop.id) }
                 products = p.await()
                 customers = c.await()
                 motorcycles = m.await()
                 settings = s.await()
                 shifts = sh.await()
                 heldSales = h.await()
+                retailSerials = rs.await()
+                retailPromos = rp.await()
             }
             offlineStore.saveProducts(context.shop.id, products)
             offlineStore.saveCustomers(context.shop.id, customers)
@@ -128,6 +141,63 @@ fun PosPage(context: ShopContext) {
             if (products.isEmpty()) throw cloudError
         }
         pendingCount = offlineStore.pendingSales().size
+    }
+
+    fun requiresRetailOnline(lines: List<CartLine> = cart): Boolean =
+        lines.any { line ->
+            val base = line.product.retailParentId?.let { parentId -> products.firstOrNull { it.id == parentId } }
+            line.product.retailParentId != null ||
+                line.product.wholesaleMin > 0 ||
+                line.product.isWeighed ||
+                line.product.batchTracked ||
+                line.product.serialTracked ||
+                base?.batchTracked == true ||
+                base?.serialTracked == true
+        } || retailPromos.any { it.isActive }
+
+    fun beginCheckout() {
+        if (cart.isEmpty() || preparingCheckout) return
+        val serialLine = cart.firstOrNull { line ->
+            val base = line.product.retailParentId?.let { parentId -> products.firstOrNull { it.id == parentId } } ?: line.product
+            if (!base.serialTracked) false
+            else {
+                val required = line.quantity * if (line.product.retailParentId != null) line.product.retailMultiplier else 1.0
+                required % 1.0 != 0.0 || line.serials.size != required.toInt()
+            }
+        }
+        if (serialLine != null) {
+            serialCheckoutProduct = serialLine.product
+            return
+        }
+        if (offlineMode) {
+            if (requiresRetailOnline()) {
+                error = "Packs, promos, weighed items, batches and serialized stock require StorePOS Cloud checkout. Reconnect before completing this cart."
+                return
+            }
+            retailQuote = null
+            checkout = true
+            return
+        }
+
+        scope.launch {
+            preparingCheckout = true
+            error = null
+            val previewCart = cart.map { it.copy(unitPriceOverride = null) }
+            runCatching { RetailRepository.quote(context.shop.id, previewCart) }
+                .onSuccess { quote ->
+                    var adjustedSubtotal = quote.subtotal
+                    cart.filter { it.unitPriceOverride != null }.forEach { line ->
+                        val quotedLine = quote.items.firstOrNull { it.productId == line.product.id }
+                        if (quotedLine != null) {
+                            adjustedSubtotal += (line.unitPriceOverride ?: quotedLine.unitPrice) * line.quantity - quotedLine.lineTotal
+                        }
+                    }
+                    retailQuote = quote.copy(subtotal = adjustedSubtotal)
+                    checkout = true
+                }
+                .onFailure { error = StoreRepository.userMessage(it) }
+            preparingCheckout = false
+        }
     }
 
     suspend fun syncOfflineSales() {
@@ -284,7 +354,10 @@ fun PosPage(context: ShopContext) {
                         visible,
                         query,
                         { query = it },
-                        { cart = addLine(cart, it) },
+                        {
+                            if (it.isWeighed) quantityProduct = it
+                            else cart = addLine(cart, it)
+                        },
                         { scanBarcode() },
                         Modifier.weight(1.3f)
                     )
@@ -293,8 +366,8 @@ fun PosPage(context: ShopContext) {
                         onQty = { p, d -> cart = changeQty(cart, p, d) },
                         onOverride = { priceProduct = it },
                         onHold = { if (cart.isNotEmpty()) holdOpen = true },
-                        onCheckout = { checkout = true },
-                        checkoutEnabled = cart.isNotEmpty() && registerOpen,
+                        onCheckout = { beginCheckout() },
+                        checkoutEnabled = cart.isNotEmpty() && registerOpen && !preparingCheckout,
                         holdEnabled = settings.allowHoldSales && cart.isNotEmpty() && !offlineMode,
                         modifier = Modifier.weight(.9f)
                     )
@@ -305,7 +378,10 @@ fun PosPage(context: ShopContext) {
                         visible,
                         query,
                         { query = it },
-                        { cart = addLine(cart, it) },
+                        {
+                            if (it.isWeighed) quantityProduct = it
+                            else cart = addLine(cart, it)
+                        },
                         { scanBarcode() },
                         Modifier.weight(1f)
                     )
@@ -328,7 +404,7 @@ fun PosPage(context: ShopContext) {
                                 }
                             }
                             Button(
-                                onClick = { checkout = true },
+                                onClick = { beginCheckout() },
                                 enabled = cart.isNotEmpty() && registerOpen
                             ) {
                                 Text("Checkout")
@@ -338,6 +414,40 @@ fun PosPage(context: ShopContext) {
                 }
             }
         }
+    }
+
+    quantityProduct?.let { product ->
+        QuantityEntryDialog(
+            product = product,
+            onDismiss = { quantityProduct = null },
+            onApply = { quantity ->
+                cart = setProductQuantity(cart, product, quantity)
+                quantityProduct = null
+            }
+        )
+    }
+
+    serialCheckoutProduct?.let { product ->
+        val line = cart.firstOrNull { it.product.id == product.id }
+        val base = product.retailParentId?.let { parentId -> products.firstOrNull { it.id == parentId } } ?: product
+        val required = line?.let {
+            (it.quantity * if (product.retailParentId != null) product.retailMultiplier else 1.0).toInt()
+        } ?: 0
+        SerialSelectionDialog(
+            product = product,
+            baseProduct = base,
+            required = required,
+            available = retailSerials.filter { it.productId == base.id && it.status == "available" },
+            selected = line?.serials.orEmpty(),
+            onDismiss = { serialCheckoutProduct = null },
+            onApply = { selected ->
+                cart = cart.map {
+                    if (it.product.id == product.id) it.copy(serials = selected) else it
+                }
+                serialCheckoutProduct = null
+                beginCheckout()
+            }
+        )
     }
 
     priceProduct?.let { product ->
@@ -463,7 +573,7 @@ fun PosPage(context: ShopContext) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Payment and inventory were committed successfully.")
+                    Text("Payment, retail pricing, and inventory were committed successfully.")
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f),
@@ -490,6 +600,14 @@ fun PosPage(context: ShopContext) {
                                 }
                             }
                         }
+                    }
+                    lastReceiptToken?.let { token ->
+                        val link = "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + token
+                        Text(
+                            "Digital receipt: " + link,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                     printMessage?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -520,6 +638,7 @@ fun PosPage(context: ShopContext) {
                             lastSale = null
                             lastReceiptCart = emptyList()
                             lastPayments = emptyList()
+                            lastReceiptToken = null
                             printMessage = null
                         },
                         modifier = Modifier.weight(1f)
@@ -559,25 +678,49 @@ fun PosPage(context: ShopContext) {
             cashierRole = cashierRole,
             hasPriceOverride = cart.any { it.hasPriceOverride },
             offlineMode = offlineMode,
+            pricingSubtotal = if (offlineMode) null else retailQuote?.subtotal,
+            pricingNote = if (!offlineMode && retailQuote != null) "StorePOS Retail pricing is active • wholesale and eligible promos are already applied." else null,
             onDismiss = { checkout = false },
-            onComplete = { customerId, bikeId, payments, discount, tax, managerPin ->
+            onComplete = { customerId, bikeId, payments, discount, tax, managerPin, charges, dueDate ->
                 scope.launch {
                     error = null
                     val soldCart = cart
                     runCatching {
-                        StoreRepository.completeSaleV3(
-                            shopId = context.shop.id,
-                            customerId = customerId,
-                            motorcycleId = bikeId,
-                            jobOrderId = null,
-                            cart = soldCart,
-                            discount = discount,
-                            tax = tax,
-                            payments = payments,
-                            managerPin = managerPin
-                        )
-                    }.onSuccess { sale ->
-                        lastReceiptCart = soldCart
+                        if (offlineMode) {
+                            StoreRepository.completeSaleV3(
+                                shopId = context.shop.id,
+                                customerId = customerId,
+                                motorcycleId = bikeId,
+                                jobOrderId = null,
+                                cart = soldCart,
+                                discount = discount,
+                                tax = tax,
+                                payments = payments,
+                                managerPin = managerPin
+                            ) to null
+                        } else {
+                            RetailRepository.checkout(
+                                shopId = context.shop.id,
+                                cart = soldCart,
+                                customerId = customerId,
+                                discount = discount,
+                                payments = payments,
+                                managerPin = managerPin,
+                                charges = charges,
+                                dueDate = dueDate
+                            ).let { it.sale to it.receiptToken }
+                        }
+                    }.onSuccess { result ->
+                        val sale = result.first
+                        lastReceiptToken = result.second
+                        val receiptCart = if (!offlineMode && retailQuote != null) {
+                            soldCart.map { line ->
+                                retailQuote!!.items.firstOrNull { it.productId == line.product.id }?.let { quoted ->
+                                    line.copy(unitPriceOverride = quoted.unitPrice)
+                                } ?: line
+                            }
+                        } else soldCart
+                        lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = sale
                         cart = emptyList()
@@ -586,7 +729,7 @@ fun PosPage(context: ShopContext) {
 
                         if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
                             printing = true
-                            printMessage = printSale(sale, soldCart, payments)
+                            printMessage = printSale(sale, lastReceiptCart, payments)
                             printing = false
                         }
                     }.onFailure { failure ->
@@ -605,6 +748,11 @@ fun PosPage(context: ShopContext) {
                             }
                             if (payments.any { it.method in listOf("store_credit","credit") }) {
                                 error = "Store credit and customer credit require an online connection."
+                                return@onFailure
+                            }
+
+                            if (charges.isNotEmpty() || dueDate != null || requiresRetailOnline(soldCart)) {
+                                error = "This retail transaction needs an online connection and cannot be queued offline."
                                 return@onFailure
                             }
 
