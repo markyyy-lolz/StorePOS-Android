@@ -802,6 +802,123 @@ fun PosPage(context: ShopContext) {
     }
 }
 
+@Composable
+private fun QuantityEntryDialog(
+    product: Product,
+    onDismiss: () -> Unit,
+    onApply: (Double) -> Unit
+) {
+    var value by remember(product.id) { mutableStateOf("1") }
+    val quantity = value.toDoubleOrNull() ?: 0.0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enter quantity • " + product.name, fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "This is a weighed product. Decimal quantities are allowed, for example 0.25 kg or 1.5 kg.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value,
+                    { value = it },
+                    label = { Text("Quantity (" + product.unit + ")") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Text("Line amount: " + money(quantity * product.sellingPrice), fontWeight = FontWeight.Bold)
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onApply(quantity) }, enabled = quantity > 0) { Text("Add to cart") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun SerialSelectionDialog(
+    product: Product,
+    baseProduct: Product,
+    required: Int,
+    available: List<RetailSerial>,
+    selected: List<String>,
+    onDismiss: () -> Unit,
+    onApply: (List<String>) -> Unit
+) {
+    val picked = remember(product.id, required) {
+        mutableStateListOf<String>().apply { addAll(selected.filter { serial -> available.any { it.serialNumber == serial } }.take(required)) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Select serial numbers", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(product.name)
+                if (baseProduct.id != product.id) {
+                    Text(
+                        "Pack uses base SKU " + baseProduct.name + " • " + qtyForPos(product.retailMultiplier) + " base unit(s) each.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "Select exactly " + required + " serial(s). " + available.size + " available.",
+                    color = if (available.size < required) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(available, key = { it.id }) { serial ->
+                        val checked = serial.serialNumber in picked
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (checked) picked.remove(serial.serialNumber)
+                                    else if (picked.size < required) picked.add(serial.serialNumber)
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    if (it) {
+                                        if (picked.size < required && serial.serialNumber !in picked) picked.add(serial.serialNumber)
+                                    } else picked.remove(serial.serialNumber)
+                                }
+                            )
+                            Text(serial.serialNumber, modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onApply(picked.toList()) }, enabled = required > 0 && picked.size == required) {
+                Text("Use serials")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+private fun setProductQuantity(cart: List<CartLine>, product: Product, quantity: Double): List<CartLine> {
+    if (quantity <= 0) return cart
+    return if (cart.none { it.product.id == product.id }) {
+        cart + CartLine(product = product, quantity = quantity)
+    } else {
+        cart.map { if (it.product.id == product.id) it.copy(quantity = quantity, serials = emptyList()) else it }
+    }
+}
+
+private fun qtyForPos(value: Double): String =
+    if (value % 1.0 == 0.0) value.toLong().toString()
+    else String.format(java.util.Locale.US, "%.3f", value).trimEnd('0').trimEnd('.')
+
 private fun addLine(cart: List<CartLine>, product: Product): List<CartLine> =
     if (cart.none { it.product.id == product.id }) cart + CartLine(product)
     else cart.map { if (it.product.id == product.id) it.copy(quantity = it.quantity + 1) else it }
