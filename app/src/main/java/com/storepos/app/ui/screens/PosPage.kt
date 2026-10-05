@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -43,6 +44,7 @@ fun PosPage(context: ShopContext) {
     var heldSales by remember { mutableStateOf<List<HeldSale>>(emptyList()) }
     var retailSerials by remember { mutableStateOf<List<RetailSerial>>(emptyList()) }
     var retailPromos by remember { mutableStateOf<List<RetailPromo>>(emptyList()) }
+    var retailFavorites by remember { mutableStateOf<List<RetailFavorite>>(emptyList()) }
 
     var cart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var query by remember { mutableStateOf("") }
@@ -114,6 +116,7 @@ fun PosPage(context: ShopContext) {
                 val h = async { StoreRepository.heldSales(context.shop.id) }
                 val rs = async { RetailRepository.serials(context.shop.id) }
                 val rp = async { RetailRepository.promos(context.shop.id) }
+                val rf = async { RetailRepository.favorites(context.shop.id) }
                 products = p.await()
                 customers = c.await()
                 motorcycles = m.await()
@@ -122,6 +125,7 @@ fun PosPage(context: ShopContext) {
                 heldSales = h.await()
                 retailSerials = rs.await()
                 retailPromos = rp.await()
+                retailFavorites = rf.await()
             }
             offlineStore.saveProducts(context.shop.id, products)
             offlineStore.saveCustomers(context.shop.id, customers)
@@ -277,6 +281,7 @@ fun PosPage(context: ShopContext) {
             it.barcode?.contains(query, true) == true ||
             it.brand?.contains(query, true) == true)
     }
+    val favoriteProducts = retailFavorites.mapNotNull { favorite -> products.firstOrNull { it.id == favorite.productId && it.isActive } }
     val openShift = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
     val cachedOpenShift = prefs.getString("open_shift_" + context.shop.id, null)
     val registerOpen = !settings.requireCashierShift ||
@@ -327,6 +332,48 @@ fun PosPage(context: ShopContext) {
         )
 
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        if (favoriteProducts.isNotEmpty()) {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Rounded.Star, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Quick favorites", fontWeight = FontWeight.Black)
+                            Text(
+                                "Tap a saved item to add it to the cart.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(favoriteProducts, key = { it.id }) { product ->
+                            AssistChip(
+                                onClick = {
+                                    if (product.isWeighed) quantityProduct = product
+                                    else cart = addLine(cart, product)
+                                },
+                                label = {
+                                    Column {
+                                        Text(product.name, fontWeight = FontWeight.Bold)
+                                        Text(
+                                            money(product.sellingPrice),
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Rounded.AddShoppingCart, contentDescription = null) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         if (!registerOpen) {
             MotoCard(Modifier.fillMaxWidth()) {
