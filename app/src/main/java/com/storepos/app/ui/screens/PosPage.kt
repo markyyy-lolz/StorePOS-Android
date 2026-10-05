@@ -305,6 +305,98 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         loading = false
     }
 
+    LaunchedEffect(pendingPayMongo?.sessionId, paymongoRetryNonce) {
+        val pending = pendingPayMongo ?: return@LaunchedEffect
+        paymongoFinalizeError = null
+
+        while (pendingPayMongo?.sessionId == pending.sessionId) {
+            val remote = runCatching {
+                PayMongoRepository.checkoutSession(pending.sessionId)
+            }.getOrNull()
+
+            if (remote == null) {
+                delay(2000)
+                continue
+            }
+
+            when (remote.status.lowercase()) {
+                "paid" -> {
+                    if (kotlin.math.abs((remote.paidAmount ?: pending.amount) - pending.amount) > 0.01) {
+                        paymongoFinalizeError =
+                            "PayMongo verified a different amount. Expected " + money(pending.amount) +
+                                ", received " + money(remote.paidAmount ?: 0.0) +
+                                ". Do not finalize this sale until reviewed."
+                        return@LaunchedEffect
+                    }
+
+                    val storeMethod = when (remote.paymentMethod?.lowercase()) {
+                        "gcash" -> "gcash"
+                        "paymaya", "maya" -> "maya"
+                        "card" -> "card"
+                        else -> "other"
+                    }
+                    val reference = "PayMongo " + (
+                        remote.paymentId
+                            ?: remote.payMongoCheckoutSessionId
+                            ?: remote.clientReference
+                    )
+                    val verifiedPayment = CheckoutPayment(
+                        method = storeMethod,
+                        amount = pending.amount,
+                        referenceNumber = reference
+                    )
+
+                    val checkoutResult = runCatching {
+                        RetailRepository.checkout(
+                            shopId = context.shop.id,
+                            cart = pending.soldCart,
+                            customerId = pending.customerId,
+                            discount = pending.discount,
+                            payments = listOf(verifiedPayment),
+                            managerPin = pending.managerPin,
+                            charges = pending.charges,
+                            dueDate = pending.dueDate,
+                            clientKey = pending.saleClientKey
+                        )
+                    }
+
+                    checkoutResult.onSuccess { result ->
+                        lastReceiptToken = result.receiptToken
+                        lastReceiptCart = pending.receiptCart
+                        lastPayments = listOf(verifiedPayment)
+                        lastSale = result.sale
+                        receiptPrintedOnce = false
+                        cart = emptyList()
+                        pendingPayMongo = null
+                        paymongoFinalizeError = null
+                        error = null
+                        refresh()
+
+                        if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
+                            printing = true
+                            printMessage = printSale(result.sale, lastReceiptCart, lastPayments)
+                            if (printMessage?.startsWith("Receipt sent") == true) receiptPrintedOnce = true
+                            printing = false
+                        }
+                    }.onFailure { failure ->
+                        paymongoFinalizeError =
+                            "Payment is VERIFIED by PayMongo, but StorePOS could not finalize the sale: " +
+                                StoreRepository.userMessage(failure) +
+                                ". Fix the issue and tap Retry finalization. The same transaction key is reused to prevent duplicate sales."
+                    }
+                    return@LaunchedEffect
+                }
+                "failed", "expired", "cancelled" -> {
+                    paymongoFinalizeError =
+                        "PayMongo checkout is " + remote.status.uppercase() +
+                            ". No StorePOS sale was created."
+                    return@LaunchedEffect
+                }
+                else -> delay(2000)
+            }
+        }
+    }
+
     if (loading) return LoadingView("Opening POS…")
 
     val visible = products.filter {
