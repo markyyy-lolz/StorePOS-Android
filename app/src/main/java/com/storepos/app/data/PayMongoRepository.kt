@@ -1,7 +1,7 @@
 package com.storepos.app.data
 
+import com.storepos.app.data.model.PayMongoCheckoutEnvelope
 import com.storepos.app.data.model.PayMongoCheckoutSession
-import com.storepos.app.data.model.PayMongoCheckoutStart
 import com.storepos.app.data.model.PayMongoIntegration
 import com.storepos.app.data.remote.SupabaseProvider
 import io.github.jan.supabase.functions.functions
@@ -22,20 +22,46 @@ object PayMongoRepository {
         shopId: String,
         amount: Double,
         requestId: String,
-        description: String
-    ): PayMongoCheckoutStart =
+        description: String,
+        flow: String = "hosted",
+        expirySeconds: Int = 300
+    ): PayMongoCheckoutSession =
         client.functions.invoke(
             function = "storepos-paymongo-checkout",
             body = buildJsonObject {
+                put("action", "create")
                 put("shop_id", shopId)
                 put("amount", amount)
                 put("request_id", requestId)
                 put("description", description)
+                put("flow", flow)
+                put("expiry_seconds", expirySeconds)
             }
-        ).body()
+        ).body<PayMongoCheckoutEnvelope>().session
 
-    suspend fun checkoutSession(id: String): PayMongoCheckoutSession? =
-        client.from("paymongo_checkout_sessions").select {
-            filter { eq("id", id) }
-        }.decodeList<PayMongoCheckoutSession>().firstOrNull()
+    suspend fun syncCheckout(
+        shopId: String,
+        sessionId: String
+    ): PayMongoCheckoutSession =
+        client.functions.invoke(
+            function = "storepos-paymongo-checkout",
+            body = buildJsonObject {
+                put("action", "status")
+                put("shop_id", shopId)
+                put("session_id", sessionId)
+            }
+        ).body<PayMongoCheckoutEnvelope>().session
+
+    suspend fun cancelCheckout(
+        shopId: String,
+        sessionId: String
+    ): PayMongoCheckoutSession =
+        client.functions.invoke(
+            function = "storepos-paymongo-checkout",
+            body = buildJsonObject {
+                put("action", "cancel")
+                put("shop_id", shopId)
+                put("session_id", sessionId)
+            }
+        ).body<PayMongoCheckoutEnvelope>().session
 }
