@@ -8,7 +8,7 @@ Modern retail POS for Philippine stores, built by **Mark Reymuel Pascual**.
 - Business type: `retail`
 - Shares the existing Supabase backend with MotoPOS while keeping shops, licenses and app updates separated.
 
-## StorePOS v1.0.0
+## StorePOS v1.2.0
 - Point of Sale
 - Barcode scanning
 - Bluetooth + USB ESC/POS receipt printing
@@ -22,3 +22,10 @@ Modern retail POS for Philippine stores, built by **Mark Reymuel Pascual**.
 - Alerts, support and licensing
 
 StorePOS does not expose MotoPOS motorcycle service/job modules in its retail plan entitlements.
+
+
+## v1.2.0
+- Quick Favorites are now surfaced directly in the POS register for faster cashier selling.
+- Advanced retail favorites remain user-specific and sync from the shared StorePOS backend.
+- Retail Suite features from v1.1.0 remain included: pack/tingi, wholesale pricing, variants, weighed items, batches/expiry, serials, promos, reservations, credit terms, scheduled pricing, stock-loss/supplier-return controls, checklists, and digital receipts.
+- Android CI validates clean debug builds on pushes and pull requests.
