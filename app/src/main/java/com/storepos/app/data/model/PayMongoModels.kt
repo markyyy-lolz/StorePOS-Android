@@ -8,6 +8,7 @@ data class PayMongoIntegration(
     @SerialName("shop_id") val shopId: String,
     val enabled: Boolean = false,
     val mode: String = "test",
+    @SerialName("public_key") val publicKey: String? = null,
     @SerialName("public_key_last4") val publicKeyLast4: String? = null,
     @SerialName("secret_key_last4") val secretKeyLast4: String? = null,
     @SerialName("webhook_secret_last4") val webhookSecretLast4: String? = null,
