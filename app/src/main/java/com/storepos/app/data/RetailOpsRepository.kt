@@ -77,6 +77,15 @@ object RetailOpsRepository {
         notes?.trim()?.takeIf { it.isNotBlank() }?.let { put("notes", it) }
     }).jsonObject
 
+    suspend fun recordReceiptReprint(
+        shopId: String,
+        saleId: String,
+        reason: String
+    ): JsonObject = action(shopId, "receipt_reprint", buildJsonObject {
+        put("sale_id", saleId)
+        put("reason", reason.trim())
+    }).jsonObject
+
     suspend fun approvals(shopId: String): List<RetailManagerApproval> =
         client.from("retail_manager_approvals").select {
             filter { eq("shop_id", shopId) }
