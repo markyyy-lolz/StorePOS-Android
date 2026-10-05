@@ -53,6 +53,14 @@ data class Product(
     @SerialName("cost_price") val costPrice: Double = 0.0,
     @SerialName("selling_price") val sellingPrice: Double = 0.0,
     @SerialName("wholesale_price") val wholesalePrice: Double? = null,
+    @SerialName("retail_parent_id") val retailParentId: String? = null,
+    @SerialName("retail_multiplier") val retailMultiplier: Double = 1.0,
+    @SerialName("wholesale_min") val wholesaleMin: Double = 0.0,
+    @SerialName("variant_group") val variantGroup: String? = null,
+    @SerialName("variant_name") val variantName: String? = null,
+    @SerialName("is_weighed") val isWeighed: Boolean = false,
+    @SerialName("batch_tracked") val batchTracked: Boolean = false,
+    @SerialName("serial_tracked") val serialTracked: Boolean = false,
     @SerialName("stock_quantity") val stockQuantity: Double = 0.0,
     @SerialName("reorder_level") val reorderLevel: Double = 5.0,
     @SerialName("track_stock") val trackStock: Boolean = true,
@@ -416,6 +424,15 @@ data class AppVersion(
     @SerialName("item_type") val itemType: String = "part",
     @SerialName("cost_price") val costPrice: Double,
     @SerialName("selling_price") val sellingPrice: Double,
+    @SerialName("wholesale_price") val wholesalePrice: Double? = null,
+    @SerialName("retail_parent_id") val retailParentId: String? = null,
+    @SerialName("retail_multiplier") val retailMultiplier: Double = 1.0,
+    @SerialName("wholesale_min") val wholesaleMin: Double = 0.0,
+    @SerialName("variant_group") val variantGroup: String? = null,
+    @SerialName("variant_name") val variantName: String? = null,
+    @SerialName("is_weighed") val isWeighed: Boolean = false,
+    @SerialName("batch_tracked") val batchTracked: Boolean = false,
+    @SerialName("serial_tracked") val serialTracked: Boolean = false,
     @SerialName("stock_quantity") val stockQuantity: Double,
     @SerialName("reorder_level") val reorderLevel: Double = 5.0,
     val unit: String = "pc"
@@ -618,7 +635,8 @@ data class ShopContext(
 data class CartLine(
     val product: Product,
     val quantity: Double = 1.0,
-    val unitPriceOverride: Double? = null
+    val unitPriceOverride: Double? = null,
+    val serials: List<String> = emptyList()
 ) {
     val unitPrice: Double get() = unitPriceOverride ?: product.sellingPrice
     val lineTotal: Double get() = unitPrice * quantity
