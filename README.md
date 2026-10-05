@@ -29,3 +29,15 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Advanced retail favorites remain user-specific and sync from the shared StorePOS backend.
 - Retail Suite features from v1.1.0 remain included: pack/tingi, wholesale pricing, variants, weighed items, batches/expiry, serials, promos, reservations, credit terms, scheduled pricing, stock-loss/supplier-return controls, checklists, and digital receipts.
 - Android CI validates clean debug builds on pushes and pull requests.
+
+
+## v1.3.0
+- Retail Control screen for Android
+- Price checker with barcode scanning
+- Reorder suggestions with supplier price comparison and draft PO creation
+- Live X reports alongside existing Z reports
+- GCash/Maya/card/bank reconciliation
+- Manager approval request/review queue
+- Negative-stock policy control
+- Data-health checks for duplicate barcodes, negative stock, missing cost, expired batches, and stale scheduled prices
+- Numbered receipt-reprint audit
