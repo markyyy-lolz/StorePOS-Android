@@ -613,7 +613,7 @@ private fun PageContent(
                     onOpenQuotations = { onNavigate(AppPage.Quotations) },
                     onOpenOperations = { onNavigate(AppPage.Operations) }
                 )
-                AppPage.POS -> com.storepos.app.ui.screens.PosPage(context)
+                AppPage.POS -> com.storepos.app.ui.screens.PosPage(context, entitlements)
                 AppPage.Inventory -> com.storepos.app.ui.screens.InventoryPage(context)
                 AppPage.Retail -> com.storepos.app.ui.screens.RetailSuitePage(context)
                 AppPage.Control -> com.storepos.app.ui.screens.RetailControlPage(context)
