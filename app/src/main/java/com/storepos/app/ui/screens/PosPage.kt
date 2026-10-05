@@ -858,6 +858,72 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         )
     }
 
+    pendingPayMongo?.let { pending ->
+        val verifiedButNotFinalized = paymongoFinalizeError?.startsWith("Payment is VERIFIED") == true
+        AlertDialog(
+            onDismissRequest = {},
+            icon = { Icon(Icons.Rounded.Payments, null, modifier = Modifier.size(42.dp)) },
+            title = {
+                Text(
+                    if (verifiedButNotFinalized) "PayMongo verified • finalize sale"
+                    else "Waiting for PayMongo",
+                    fontWeight = FontWeight.Black
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (verifiedButNotFinalized)
+                            "The customer payment is already verified. StorePOS has not created the sale yet."
+                        else
+                            "Complete payment in the secure PayMongo checkout. StorePOS is checking the signed webhook automatically."
+                    )
+                    Text("Amount: " + money(pending.amount), fontWeight = FontWeight.Bold)
+                    Text(
+                        "Reference: " + pending.requestId,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    paymongoFinalizeError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (!verifiedButNotFinalized) {
+                        Text(
+                            "Do not complete the cart manually while this payment is pending. When PayMongo confirms payment, the sale will be finalized automatically.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (verifiedButNotFinalized) {
+                    Button(onClick = {
+                        paymongoFinalizeError = null
+                        paymongoRetryNonce += 1
+                    }) { Text("Retry finalization") }
+                } else {
+                    Button(onClick = {
+                        runCatching {
+                            androidContext.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(pending.checkoutUrl))
+                            )
+                        }.onFailure {
+                            error = "Unable to open the PayMongo checkout URL on this device."
+                        }
+                    }) { Text("Open PayMongo") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingPayMongo = null
+                    paymongoFinalizeError = null
+                    error = "Stopped waiting for PayMongo. Before retrying checkout, verify that the customer was not already charged."
+                }) { Text("Stop waiting") }
+            }
+        )
+    }
+
     if (checkout) {
         PosCheckoutDialog(
             cart = cart,
