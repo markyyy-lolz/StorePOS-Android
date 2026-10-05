@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.RetailRepository
+import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -65,6 +66,7 @@ fun PosPage(context: ShopContext) {
     var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
     var lastReceiptToken by remember { mutableStateOf<String?>(null) }
+    var receiptPrintedOnce by remember { mutableStateOf(false) }
     var printing by remember { mutableStateOf(false) }
     var printMessage by remember { mutableStateOf<String?>(null) }
 
@@ -666,10 +668,26 @@ fun PosPage(context: ShopContext) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = {
+                            val isReprint = receiptPrintedOnce
                             printing = true
                             printMessage = null
                             scope.launch {
-                                printMessage = printSale(sale, lastReceiptCart, lastPayments)
+                                val result = printSale(sale, lastReceiptCart, lastPayments)
+                                printMessage = result
+                                if (result.startsWith("Receipt sent")) {
+                                    if (isReprint) {
+                                        runCatching {
+                                            RetailOpsRepository.recordReceiptReprint(
+                                                context.shop.id,
+                                                sale.id,
+                                                "Android POS completed-sale reprint"
+                                            )
+                                        }.onFailure {
+                                            printMessage = result + " Reprint audit could not sync: " + StoreRepository.userMessage(it)
+                                        }
+                                    }
+                                    receiptPrintedOnce = true
+                                }
                                 printing = false
                             }
                         },
@@ -686,6 +704,7 @@ fun PosPage(context: ShopContext) {
                             lastReceiptCart = emptyList()
                             lastPayments = emptyList()
                             lastReceiptToken = null
+                            receiptPrintedOnce = false
                             printMessage = null
                         },
                         modifier = Modifier.weight(1f)
@@ -770,6 +789,7 @@ fun PosPage(context: ShopContext) {
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = sale
+                        receiptPrintedOnce = false
                         cart = emptyList()
                         checkout = false
                         refresh()
@@ -777,6 +797,7 @@ fun PosPage(context: ShopContext) {
                         if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
                             printing = true
                             printMessage = printSale(sale, lastReceiptCart, payments)
+                            if (printMessage?.startsWith("Receipt sent") == true) receiptPrintedOnce = true
                             printing = false
                         }
                     }.onFailure { failure ->
