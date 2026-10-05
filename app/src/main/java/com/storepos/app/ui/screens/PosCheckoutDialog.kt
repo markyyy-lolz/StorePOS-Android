@@ -36,6 +36,7 @@ fun PosCheckoutDialog(
     cashierRole: Boolean,
     hasPriceOverride: Boolean,
     offlineMode: Boolean,
+    paymongoAvailable: Boolean = false,
     pricingSubtotal: Double? = null,
     pricingNote: String? = null,
     onDismiss: () -> Unit,
@@ -111,10 +112,12 @@ fun PosCheckoutDialog(
     val storeCreditValid = payments.filter { it.method == "store_credit" }
         .sumOf { it.amount.toDoubleOrNull() ?: 0.0 } <= (customer?.storeCreditBalance ?: 0.0) + 0.009
     val managerValid = !needsManagerPin || (!offlineMode && managerPin.length in 4..8)
+    val paymongoValid = payments.none { it.method == "paymongo" } ||
+        (!offlineMode && paymongoAvailable && payments.size == 1)
     val paymentValid = payments.isNotEmpty() &&
         paymentModels.size == payments.size &&
         abs(paymentTotal - total) < 0.01 &&
-        refsValid && cashValid && customerMethodsValid && storeCreditValid
+        refsValid && cashValid && customerMethodsValid && storeCreditValid && paymongoValid
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -264,6 +267,7 @@ fun PosCheckoutDialog(
                     PaymentRow(
                         row = row,
                         customer = customer,
+                        paymongoAvailable = paymongoAvailable && !offlineMode,
                         onChange = { updated ->
                             payments = payments.mapIndexed { i, old -> if (i == index) updated else old }
                         },
@@ -293,8 +297,19 @@ fun PosCheckoutDialog(
                 }
                 if (!refsValid) {
                     Text(
-                        "Reference number is required for GCash, Maya, card, and bank payments.",
+                        "Reference number is required for manual GCash, Maya, card, and bank payments.",
                         color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                if (payments.any { it.method == "paymongo" }) {
+                    Text(
+                        if (paymongoValid)
+                            "PayMongo will open a secure hosted checkout. StorePOS finalizes the sale only after the signed PayMongo webhook confirms payment."
+                        else
+                            "PayMongo automatic checkout must be the only payment method for this sale and requires an online connection.",
+                        color = if (paymongoValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -350,11 +365,16 @@ fun PosCheckoutDialog(
 private fun PaymentRow(
     row: PaymentDraft,
     customer: Customer?,
+    paymongoAvailable: Boolean,
     onChange: (PaymentDraft) -> Unit,
     onRemove: (() -> Unit)?
 ) {
     var menu by remember(row.key) { mutableStateOf(false) }
-    val methods = listOf("cash","gcash","maya","card","bank","store_credit","credit","other")
+    val methods = buildList {
+        add("cash")
+        if (paymongoAvailable) add("paymongo")
+        addAll(listOf("gcash","maya","card","bank","store_credit","credit","other"))
+    }
 
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -376,6 +396,7 @@ private fun PaymentRow(
                                         when (method) {
                                             "store_credit" -> "STORE CREDIT" + (customer?.let { " • " + money(it.storeCreditBalance) } ?: "")
                                             "credit" -> "CUSTOMER CREDIT" + (customer?.let { " • limit " + money(it.creditLimit) } ?: "")
+                                            "paymongo" -> "PAYMONGO • AUTO VERIFY"
                                             else -> method.uppercase()
                                         }
                                     )
@@ -418,6 +439,12 @@ private fun PaymentRow(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
+                )
+            } else if (row.method == "paymongo") {
+                Text(
+                    "No manual reference needed. The transaction is verified automatically through this shop's own PayMongo webhook.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
                 )
             } else if (row.method in listOf("gcash","maya","card","bank","other")) {
                 OutlinedTextField(
