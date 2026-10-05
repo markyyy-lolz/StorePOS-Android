@@ -1,5 +1,7 @@
 package com.storepos.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.RetailRepository
+import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.model.*
@@ -30,13 +33,29 @@ import com.storepos.app.printing.ReceiptPrinter
 import com.storepos.app.printing.UsbReceiptPrinter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
+private data class PendingPayMongoSale(
+    val sessionId: String,
+    val checkoutUrl: String,
+    val requestId: String,
+    val saleClientKey: String,
+    val customerId: String?,
+    val soldCart: List<CartLine>,
+    val receiptCart: List<CartLine>,
+    val discount: Double,
+    val managerPin: String?,
+    val charges: List<RetailCharge>,
+    val dueDate: String?,
+    val amount: Double
+)
+
 @Composable
-fun PosPage(context: ShopContext) {
+fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var motorcycles by remember { mutableStateOf<List<Motorcycle>>(emptyList()) }
@@ -46,6 +65,7 @@ fun PosPage(context: ShopContext) {
     var retailSerials by remember { mutableStateOf<List<RetailSerial>>(emptyList()) }
     var retailPromos by remember { mutableStateOf<List<RetailPromo>>(emptyList()) }
     var retailFavorites by remember { mutableStateOf<List<RetailFavorite>>(emptyList()) }
+    var paymongoIntegration by remember { mutableStateOf<PayMongoIntegration?>(null) }
 
     var cart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var query by remember { mutableStateOf("") }
@@ -69,6 +89,10 @@ fun PosPage(context: ShopContext) {
     var receiptPrintedOnce by remember { mutableStateOf(false) }
     var printing by remember { mutableStateOf(false) }
     var printMessage by remember { mutableStateOf<String?>(null) }
+
+    var pendingPayMongo by remember { mutableStateOf<PendingPayMongoSale?>(null) }
+    var paymongoFinalizeError by remember { mutableStateOf<String?>(null) }
+    var paymongoRetryNonce by remember { mutableIntStateOf(0) }
 
     var offlineMode by remember { mutableStateOf(false) }
     var offlineQueued by remember { mutableStateOf<Double?>(null) }
