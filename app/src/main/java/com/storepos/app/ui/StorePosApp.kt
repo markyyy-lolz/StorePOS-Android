@@ -33,6 +33,7 @@ enum class AppPage(val label: String, val icon: ImageVector) {
     POS("POS", Icons.Rounded.PointOfSale),
     Inventory("Inventory", Icons.Rounded.Inventory2),
     Retail("Retail Suite", Icons.Rounded.Store),
+    Control("Retail Control", Icons.Rounded.AdminPanelSettings),
     Customers("Customers", Icons.Rounded.Groups),
     Service("Service", Icons.Rounded.Build),
     Quotations("Quotations", Icons.Rounded.RequestQuote),
@@ -273,6 +274,7 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
         AppPage.Dashboard,
         AppPage.POS,
         AppPage.Retail,
+        AppPage.Control,
         AppPage.Customers,
         AppPage.Service,
         AppPage.Quotations,
@@ -285,6 +287,7 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
         AppPage.Dashboard,
         AppPage.Inventory,
         AppPage.Retail,
+        AppPage.Control,
         AppPage.Suppliers,
         AppPage.Operations,
         AppPage.Alerts,
@@ -312,6 +315,7 @@ private fun pageAllowedByPlan(page: AppPage, entitlements: PlanEntitlements): Bo
         AppPage.POS -> "pos" in features
         AppPage.Inventory -> "inventory" in features
         AppPage.Retail -> features.any { it in setOf("retail_suite", "inventory", "operations", "pos") }
+        AppPage.Control -> features.any { it in setOf("retail_suite", "inventory", "operations", "pos") }
         AppPage.Customers -> "customers" in features
         AppPage.Service -> "service_jobs" in features
         AppPage.Quotations -> "quotations" in features
@@ -612,6 +616,7 @@ private fun PageContent(
                 AppPage.POS -> com.storepos.app.ui.screens.PosPage(context)
                 AppPage.Inventory -> com.storepos.app.ui.screens.InventoryPage(context)
                 AppPage.Retail -> com.storepos.app.ui.screens.RetailSuitePage(context)
+                AppPage.Control -> com.storepos.app.ui.screens.RetailControlPage(context)
                 AppPage.Customers -> com.storepos.app.ui.screens.CustomersPage(context)
                 AppPage.Service -> com.storepos.app.ui.screens.ServicePage(context)
                 AppPage.Quotations -> com.storepos.app.ui.screens.QuotationsPage(context)
