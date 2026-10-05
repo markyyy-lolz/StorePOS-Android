@@ -37,6 +37,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.util.UUID
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -876,36 +877,159 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     pendingPayMongo?.let { pending ->
         val verifiedButNotFinalized = paymongoFinalizeError?.startsWith("Payment is VERIFIED") == true
+        val terminalError = paymongoFinalizeError != null && !verifiedButNotFinalized
+        val qrBitmap = remember(pending.sessionId, pending.qrImageUrl) {
+            decodePayMongoQr(pending.qrImageUrl)
+        }
+        var remainingSeconds by remember(pending.sessionId, pending.expiresAt) {
+            mutableIntStateOf(
+                pending.expiresAt?.let {
+                    runCatching {
+                        ((Instant.parse(it).toEpochMilli() - System.currentTimeMillis() + 999L) / 1000L)
+                            .coerceAtLeast(0L)
+                            .toInt()
+                    }.getOrDefault(0)
+                } ?: 0
+            )
+        }
+
+        LaunchedEffect(pending.sessionId, pending.expiresAt, paymongoPaymentReceived) {
+            while (
+                pendingPayMongo?.sessionId == pending.sessionId &&
+                !paymongoPaymentReceived &&
+                !terminalError
+            ) {
+                remainingSeconds = pending.expiresAt?.let {
+                    runCatching {
+                        ((Instant.parse(it).toEpochMilli() - System.currentTimeMillis() + 999L) / 1000L)
+                            .coerceAtLeast(0L)
+                            .toInt()
+                    }.getOrDefault(0)
+                } ?: remainingSeconds
+                if (remainingSeconds <= 0) break
+                delay(1000)
+            }
+        }
+
         AlertDialog(
             onDismissRequest = {},
-            icon = { Icon(Icons.Rounded.Payments, null, modifier = Modifier.size(42.dp)) },
+            icon = {
+                Icon(
+                    if (paymongoPaymentReceived) Icons.Rounded.CheckCircle else Icons.Rounded.QrCode2,
+                    null,
+                    modifier = Modifier.size(42.dp)
+                )
+            },
             title = {
                 Text(
-                    if (verifiedButNotFinalized) "PayMongo verified • finalize sale"
-                    else "Waiting for PayMongo",
+                    when {
+                        paymongoPaymentReceived -> "Payment received"
+                        verifiedButNotFinalized -> "PayMongo verified • finalize sale"
+                        terminalError -> "QR Ph payment stopped"
+                        else -> "Scan to pay"
+                    },
                     fontWeight = FontWeight.Black
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text(
-                        if (verifiedButNotFinalized)
-                            "The customer payment is already verified. StorePOS has not created the sale yet."
-                        else
-                            "Complete payment in the secure PayMongo checkout. StorePOS is checking the signed webhook automatically."
+                        money(pending.amount),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black
                     )
-                    Text("Amount: " + money(pending.amount), fontWeight = FontWeight.Bold)
+
+                    when {
+                        paymongoPaymentReceived -> {
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(72.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Payment received. Finalizing sale…",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                        !verifiedButNotFinalized && !terminalError -> {
+                            if (qrBitmap != null) {
+                                Surface(
+                                    color = androidx.compose.ui.graphics.Color.White,
+                                    shape = RoundedCornerShape(20.dp)
+                                ) {
+                                    Image(
+                                        bitmap = qrBitmap,
+                                        contentDescription = "QR Ph payment code",
+                                        modifier = Modifier
+                                            .size(280.dp)
+                                            .padding(12.dp)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    "QR image could not be rendered. Cancel this QR and generate a new one.",
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+
+                            Text(
+                                "Scan with GCash, Maya, or a QR Ph-enabled banking app.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Text("Waiting for payment…")
+                            }
+
+                            if (remainingSeconds > 0) {
+                                Text(
+                                    "QR expires in %d:%02d".format(
+                                        remainingSeconds / 60,
+                                        remainingSeconds % 60
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
                     Text(
                         "Reference: " + pending.requestId,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    paymongoFinalizeError?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+
+                    if (paymongoIntegration?.mode == "test") {
+                        AssistChip(
+                            onClick = {},
+                            label = { Text("PAYMONGO TEST MODE") }
+                        )
                     }
-                    if (!verifiedButNotFinalized) {
+
+                    paymongoFinalizeError?.let {
                         Text(
-                            "Do not complete the cart manually while this payment is pending. When PayMongo confirms payment, the sale will be finalized automatically.",
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    if (!paymongoPaymentReceived && !verifiedButNotFinalized && !terminalError) {
+                        Text(
+                            "The sale is not completed until StorePOS receives a verified PayMongo payment status.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -913,29 +1037,47 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 }
             },
             confirmButton = {
-                if (verifiedButNotFinalized) {
-                    Button(onClick = {
-                        paymongoFinalizeError = null
-                        paymongoRetryNonce += 1
-                    }) { Text("Retry finalization") }
-                } else {
-                    Button(onClick = {
-                        runCatching {
-                            androidContext.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(pending.checkoutUrl))
-                            )
-                        }.onFailure {
-                            error = "Unable to open the PayMongo checkout URL on this device."
+                when {
+                    verifiedButNotFinalized -> {
+                        Button(onClick = {
+                            paymongoFinalizeError = null
+                            paymongoRetryNonce += 1
+                        }) { Text("Retry finalization") }
+                    }
+                    terminalError -> {
+                        Button(onClick = {
+                            error = paymongoFinalizeError
+                            pendingPayMongo = null
+                            paymongoFinalizeError = null
+                            paymongoPaymentReceived = false
+                        }) { Text("Close") }
+                    }
+                    !paymongoPaymentReceived -> {
+                        TextButton(onClick = { paymongoRetryNonce += 1 }) {
+                            Text("Check now")
                         }
-                    }) { Text("Open PayMongo") }
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    pendingPayMongo = null
-                    paymongoFinalizeError = null
-                    error = "Stopped waiting for PayMongo. Before retrying checkout, verify that the customer was not already charged."
-                }) { Text("Stop waiting") }
+                if (!paymongoPaymentReceived && !verifiedButNotFinalized && !terminalError) {
+                    TextButton(onClick = {
+                        scope.launch {
+                            val cancelled = runCatching {
+                                PayMongoRepository.cancelCheckout(context.shop.id, pending.sessionId)
+                            }
+                            if (cancelled.isSuccess) {
+                                pendingPayMongo = null
+                                paymongoFinalizeError = null
+                                paymongoPaymentReceived = false
+                                error = "QR Ph payment cancelled. No StorePOS sale was created."
+                            } else {
+                                error = "Could not cancel QR because its payment status may have changed. StorePOS is checking it again."
+                                paymongoRetryNonce += 1
+                            }
+                        }
+                    }) { Text("Cancel QR") }
+                }
             }
         )
     }
@@ -986,7 +1128,10 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             )
                         }.onSuccess { started ->
                             val qrImage = started.qrImageUrl
-                                ?: throw IllegalStateException("PayMongo did not return a QR Ph image.")
+                            if (qrImage.isNullOrBlank()) {
+                                error = "PayMongo did not return a QR Ph image. Retry the payment."
+                                return@onSuccess
+                            }
                             pendingPayMongo = PendingPayMongoSale(
                                 sessionId = started.id,
                                 qrImageUrl = qrImage,
