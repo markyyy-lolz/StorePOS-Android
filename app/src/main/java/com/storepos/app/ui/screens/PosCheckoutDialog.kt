@@ -306,7 +306,7 @@ fun PosCheckoutDialog(
                 if (payments.any { it.method == "paymongo" }) {
                     Text(
                         if (paymongoValid)
-                            "PayMongo will open a secure hosted checkout. StorePOS finalizes the sale only after the signed PayMongo webhook confirms payment."
+                            "StorePOS will generate a dynamic QR Ph code for the exact amount and finalize only after PayMongo confirms payment."
                         else
                             "PayMongo automatic checkout must be the only payment method for this sale and requires an online connection.",
                         color = if (paymongoValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
@@ -396,7 +396,7 @@ private fun PaymentRow(
                                         when (method) {
                                             "store_credit" -> "STORE CREDIT" + (customer?.let { " • " + money(it.storeCreditBalance) } ?: "")
                                             "credit" -> "CUSTOMER CREDIT" + (customer?.let { " • limit " + money(it.creditLimit) } ?: "")
-                                            "paymongo" -> "PAYMONGO • AUTO VERIFY"
+                                            "paymongo" -> "QR PH • AUTO VERIFY"
                                             else -> method.uppercase()
                                         }
                                     )
@@ -442,7 +442,7 @@ private fun PaymentRow(
                 )
             } else if (row.method == "paymongo") {
                 Text(
-                    "No manual reference needed. The transaction is verified automatically through this shop's own PayMongo webhook.",
+                    "StorePOS will show a dynamic QR Ph code with the exact sale amount. No manual reference is needed; payment is verified automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
