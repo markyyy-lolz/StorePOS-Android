@@ -170,6 +170,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             offlineMode = true
             if (products.isEmpty()) throw cloudError
         }
+        paymongoIntegration = if (
+            !offlineMode &&
+            entitlements.valid &&
+            entitlements.features.contains("paymongo_payments")
+        ) {
+            runCatching { PayMongoRepository.integration(context.shop.id) }.getOrNull()
+        } else null
         pendingCount = offlineStore.pendingSales().size
     }
 
