@@ -1,6 +1,7 @@
 package com.storepos.app.data
 
 import com.storepos.app.BuildConfig
+import com.storepos.app.update.latestStorePosVersion
 import com.storepos.app.data.model.*
 import com.storepos.app.data.remote.SupabaseProvider
 import io.github.jan.supabase.auth.auth
@@ -876,8 +877,11 @@ object StoreRepository {
 
     suspend fun latestVersion(): AppVersion? =
         client.from("app_versions").select {
-            filter { eq("is_published", true) }
-        }.decodeList<AppVersion>().maxByOrNull { it.versionCode }
+            filter {
+                eq("is_published", true)
+                eq("app_code", "storepos")
+            }
+        }.decodeList<AppVersion>().let(::latestStorePosVersion)
 
 
     suspend fun completeOfflineSale(payload: OfflineSalePayload): Sale {

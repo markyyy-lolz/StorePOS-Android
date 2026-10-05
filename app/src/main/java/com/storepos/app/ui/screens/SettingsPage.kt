@@ -74,7 +74,7 @@ fun SettingsPage(context: ShopContext) {
                 fontWeight = FontWeight.Black,
                 color = MaterialTheme.colorScheme.primary
             )
-            Text("Motorcycle Shop POS & Management System", fontWeight = FontWeight.SemiBold)
+            Text("Retail Store POS & Management System", fontWeight = FontWeight.SemiBold)
             HorizontalDivider()
             Text("Created & Developed by Mark Reymuel Pascual", fontWeight = FontWeight.Bold)
             Text(

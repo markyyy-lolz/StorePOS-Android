@@ -69,7 +69,7 @@ fun AuthScreen(
                 Text("StorePOS", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
                 Text(
                     if (signUp) "Create the owner account for your retail store."
-                    else "Sign in to manage sales, inventory and service jobs.",
+                    else "Sign in to manage sales, inventory and your retail store.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 

@@ -374,6 +374,8 @@ data class AnalyticsSummary(
 
 @Serializable
 data class AppVersion(
+    @SerialName("app_code") val appCode: String = "",
+    @SerialName("is_published") val isPublished: Boolean = false,
     @SerialName("version_code") val versionCode: Int,
     @SerialName("version_name") val versionName: String,
     val title: String? = null,

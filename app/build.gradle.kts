@@ -43,8 +43,8 @@ android {
         applicationId = "com.storepos.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         buildConfigField("String", "SUPABASE_URL", quotedLocalProperty("SUPABASE_URL"))
         buildConfigField(
@@ -93,6 +93,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
 
