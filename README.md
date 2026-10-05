@@ -41,3 +41,11 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Negative-stock policy control
 - Data-health checks for duplicate barcodes, negative stock, missing cost, expired batches, and stale scheduled prices
 - Numbered receipt-reprint audit
+
+
+## v1.3.1
+- Native QR Ph appears directly inside the Android POS checkout with the exact sale amount.
+- Automatic PayMongo webhook verification and payment-status fallback.
+- Payment received state, QR expiry, cancellation safety, and retry-safe sale finalization.
+- Per-client PayMongo merchant accounts through the Custom StorePOS license module.
+- Owner/Admin credential setup with server-side secret handling and Supabase Vault encryption.
