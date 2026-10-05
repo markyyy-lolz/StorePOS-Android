@@ -1,8 +1,9 @@
 package com.storepos.app.ui.screens
 
-import android.content.Intent
-import android.net.Uri
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -41,7 +43,8 @@ import com.journeyapps.barcodescanner.ScanOptions
 
 private data class PendingPayMongoSale(
     val sessionId: String,
-    val checkoutUrl: String,
+    val qrImageUrl: String,
+    val expiresAt: String?,
     val requestId: String,
     val saleClientKey: String,
     val customerId: String?,
@@ -53,6 +56,15 @@ private data class PendingPayMongoSale(
     val dueDate: String?,
     val amount: Double
 )
+
+private fun decodePayMongoQr(value: String?): androidx.compose.ui.graphics.ImageBitmap? {
+    val encoded = value?.substringAfter("base64,", value)?.trim().orEmpty()
+    if (encoded.isBlank()) return null
+    return runCatching {
+        val bytes = Base64.decode(encoded, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+    }.getOrNull()
+}
 
 @Composable
 fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
@@ -92,6 +104,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     var pendingPayMongo by remember { mutableStateOf<PendingPayMongoSale?>(null) }
     var paymongoFinalizeError by remember { mutableStateOf<String?>(null) }
+    var paymongoPaymentReceived by remember { mutableStateOf(false) }
     var paymongoRetryNonce by remember { mutableIntStateOf(0) }
 
     var offlineMode by remember { mutableStateOf(false) }
@@ -311,7 +324,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
         while (pendingPayMongo?.sessionId == pending.sessionId) {
             val remote = runCatching {
-                PayMongoRepository.checkoutSession(pending.sessionId)
+                PayMongoRepository.syncCheckout(context.shop.id, pending.sessionId)
             }.getOrNull()
 
             if (remote == null) {
@@ -321,6 +334,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
             when (remote.status.lowercase()) {
                 "paid" -> {
+                    paymongoPaymentReceived = true
                     if (kotlin.math.abs((remote.paidAmount ?: pending.amount) - pending.amount) > 0.01) {
                         paymongoFinalizeError =
                             "PayMongo verified a different amount. Expected " + money(pending.amount) +
@@ -346,6 +360,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         referenceNumber = reference
                     )
 
+                    delay(650)
                     val checkoutResult = runCatching {
                         RetailRepository.checkout(
                             shopId = context.shop.id,
@@ -369,6 +384,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         cart = emptyList()
                         pendingPayMongo = null
                         paymongoFinalizeError = null
+                        paymongoPaymentReceived = false
                         error = null
                         refresh()
 
@@ -964,13 +980,18 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 shopId = context.shop.id,
                                 amount = paymongoPayment.amount,
                                 requestId = requestId,
-                                description = context.shop.name + " StorePOS sale"
+                                description = context.shop.name + " StorePOS sale",
+                                flow = "qrph",
+                                expirySeconds = 300
                             )
                         }.onSuccess { started ->
+                            val qrImage = started.qrImageUrl
+                                ?: throw IllegalStateException("PayMongo did not return a QR Ph image.")
                             pendingPayMongo = PendingPayMongoSale(
                                 sessionId = started.id,
-                                checkoutUrl = started.checkoutUrl,
-                                requestId = started.reference,
+                                qrImageUrl = qrImage,
+                                expiresAt = started.expiresAt,
+                                requestId = started.clientReference,
                                 saleClientKey = saleClientKey,
                                 customerId = customerId,
                                 soldCart = soldCart,
@@ -982,17 +1003,10 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 amount = paymongoPayment.amount
                             )
                             paymongoFinalizeError = null
+                            paymongoPaymentReceived = false
                             checkout = false
-
-                            runCatching {
-                                androidContext.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(started.checkoutUrl))
-                                )
-                            }.onFailure {
-                                error = "PayMongo checkout was created. Tap Open PayMongo in the waiting dialog to continue payment."
-                            }
                         }.onFailure { failure ->
-                            error = "Unable to start PayMongo checkout: " + StoreRepository.userMessage(failure)
+                            error = "Unable to generate QR Ph: " + StoreRepository.userMessage(failure)
                         }
                         return@launch
                     }
