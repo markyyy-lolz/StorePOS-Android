@@ -867,6 +867,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             cashierRole = cashierRole,
             hasPriceOverride = cart.any { it.hasPriceOverride },
             offlineMode = offlineMode,
+            paymongoAvailable = !offlineMode && paymongoIntegration?.enabled == true &&
+                entitlements.valid && entitlements.features.contains("paymongo_payments"),
             pricingSubtotal = if (offlineMode) null else retailQuote?.subtotal,
             pricingNote = if (!offlineMode && retailQuote != null) "StorePOS Retail pricing is active • wholesale and eligible promos are already applied." else null,
             onDismiss = { checkout = false },
@@ -874,6 +876,61 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 scope.launch {
                     error = null
                     val soldCart = cart
+                    val receiptCart = if (!offlineMode && retailQuote != null) {
+                        soldCart.map { line ->
+                            retailQuote!!.items.firstOrNull { it.productId == line.product.id }?.let { quoted ->
+                                line.copy(unitPriceOverride = quoted.unitPrice)
+                            } ?: line
+                        }
+                    } else soldCart
+
+                    val paymongoPayment = payments.singleOrNull()?.takeIf { it.method == "paymongo" }
+                    if (paymongoPayment != null) {
+                        if (offlineMode || paymongoIntegration?.enabled != true) {
+                            error = "PayMongo automatic payments require an active online PayMongo connection for this shop."
+                            return@launch
+                        }
+
+                        val requestId = "SP-" + UUID.randomUUID().toString()
+                        val saleClientKey = UUID.randomUUID().toString()
+                        runCatching {
+                            PayMongoRepository.createCheckout(
+                                shopId = context.shop.id,
+                                amount = paymongoPayment.amount,
+                                requestId = requestId,
+                                description = context.shop.name + " StorePOS sale"
+                            )
+                        }.onSuccess { started ->
+                            pendingPayMongo = PendingPayMongoSale(
+                                sessionId = started.id,
+                                checkoutUrl = started.checkoutUrl,
+                                requestId = started.reference,
+                                saleClientKey = saleClientKey,
+                                customerId = customerId,
+                                soldCart = soldCart,
+                                receiptCart = receiptCart,
+                                discount = discount,
+                                managerPin = managerPin,
+                                charges = charges,
+                                dueDate = dueDate,
+                                amount = paymongoPayment.amount
+                            )
+                            paymongoFinalizeError = null
+                            checkout = false
+
+                            runCatching {
+                                androidContext.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(started.checkoutUrl))
+                                )
+                            }.onFailure {
+                                error = "PayMongo checkout was created. Tap Open PayMongo in the waiting dialog to continue payment."
+                            }
+                        }.onFailure { failure ->
+                            error = "Unable to start PayMongo checkout: " + StoreRepository.userMessage(failure)
+                        }
+                        return@launch
+                    }
+
                     runCatching {
                         if (offlineMode) {
                             StoreRepository.completeSaleV3(
@@ -902,13 +959,6 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     }.onSuccess { result ->
                         val sale = result.first
                         lastReceiptToken = result.second
-                        val receiptCart = if (!offlineMode && retailQuote != null) {
-                            soldCart.map { line ->
-                                retailQuote!!.items.firstOrNull { it.productId == line.product.id }?.let { quoted ->
-                                    line.copy(unitPriceOverride = quoted.unitPrice)
-                                } ?: line
-                            }
-                        } else soldCart
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = sale
