@@ -32,6 +32,7 @@ enum class AppPage(val label: String, val icon: ImageVector) {
     Dashboard("Dashboard", Icons.Rounded.Dashboard),
     POS("POS", Icons.Rounded.PointOfSale),
     Inventory("Inventory", Icons.Rounded.Inventory2),
+    Retail("Retail Suite", Icons.Rounded.Store),
     Customers("Customers", Icons.Rounded.Groups),
     Service("Service", Icons.Rounded.Build),
     Quotations("Quotations", Icons.Rounded.RequestQuote),
@@ -271,6 +272,7 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
     "cashier" -> listOf(
         AppPage.Dashboard,
         AppPage.POS,
+        AppPage.Retail,
         AppPage.Customers,
         AppPage.Service,
         AppPage.Quotations,
@@ -282,6 +284,7 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
     "inventory" -> listOf(
         AppPage.Dashboard,
         AppPage.Inventory,
+        AppPage.Retail,
         AppPage.Suppliers,
         AppPage.Operations,
         AppPage.Alerts,
@@ -308,6 +311,7 @@ private fun pageAllowedByPlan(page: AppPage, entitlements: PlanEntitlements): Bo
     return when (page) {
         AppPage.POS -> "pos" in features
         AppPage.Inventory -> "inventory" in features
+        AppPage.Retail -> features.any { it in setOf("retail_suite", "inventory", "operations", "pos") }
         AppPage.Customers -> "customers" in features
         AppPage.Service -> "service_jobs" in features
         AppPage.Quotations -> "quotations" in features
@@ -607,6 +611,7 @@ private fun PageContent(
                 )
                 AppPage.POS -> com.storepos.app.ui.screens.PosPage(context)
                 AppPage.Inventory -> com.storepos.app.ui.screens.InventoryPage(context)
+                AppPage.Retail -> com.storepos.app.ui.screens.RetailSuitePage(context)
                 AppPage.Customers -> com.storepos.app.ui.screens.CustomersPage(context)
                 AppPage.Service -> com.storepos.app.ui.screens.ServicePage(context)
                 AppPage.Quotations -> com.storepos.app.ui.screens.QuotationsPage(context)
