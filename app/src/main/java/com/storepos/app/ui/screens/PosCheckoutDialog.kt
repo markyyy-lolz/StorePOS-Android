@@ -36,8 +36,10 @@ fun PosCheckoutDialog(
     cashierRole: Boolean,
     hasPriceOverride: Boolean,
     offlineMode: Boolean,
+    pricingSubtotal: Double? = null,
+    pricingNote: String? = null,
     onDismiss: () -> Unit,
-    onComplete: (String?, String?, List<CheckoutPayment>, Double, Double, String?) -> Unit
+    onComplete: (String?, String?, List<CheckoutPayment>, Double, Double, String?, List<RetailCharge>, String?) -> Unit
 ) {
     var customer by remember { mutableStateOf<Customer?>(null) }
     var bike by remember { mutableStateOf<Motorcycle?>(null) }
@@ -46,15 +48,23 @@ fun PosCheckoutDialog(
     var discountText by remember { mutableStateOf("0") }
     var managerPin by remember { mutableStateOf("") }
     var payments by remember { mutableStateOf(listOf(PaymentDraft())) }
+    var chargeName by remember { mutableStateOf("") }
+    var chargeAmountText by remember { mutableStateOf("") }
+    var dueDate by remember { mutableStateOf("") }
 
-    val subtotal = cart.sumOf { it.lineTotal }
-    val discount = (discountText.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0).coerceAtMost(subtotal)
-    val taxable = (subtotal - discount).coerceAtLeast(0.0)
+    val subtotal = pricingSubtotal ?: cart.sumOf { it.lineTotal }
+    val chargeAmount = (chargeAmountText.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
+    val charges = if (!offlineMode && chargeName.isNotBlank() && chargeAmount > 0) {
+        listOf(RetailCharge(chargeName.trim(), chargeAmount))
+    } else emptyList()
+    val beforeDiscount = subtotal + charges.sumOf { it.amount }
+    val discount = (discountText.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0).coerceAtMost(beforeDiscount)
+    val taxable = (beforeDiscount - discount).coerceAtLeast(0.0)
     val tax = if (settings.taxEnabled) {
         round((taxable * settings.defaultTaxRate / 100.0) * 100.0) / 100.0
     } else 0.0
     val total = round((taxable + tax) * 100.0) / 100.0
-    val discountPercent = if (subtotal > 0) discount / subtotal * 100.0 else 0.0
+    val discountPercent = if (beforeDiscount > 0) discount / beforeDiscount * 100.0 else 0.0
     val needsManagerPin = cashierRole &&
         settings.managerPinForDiscount &&
         (discountPercent > settings.cashierDiscountLimitPercent || hasPriceOverride)
@@ -121,6 +131,9 @@ fun PosCheckoutDialog(
                     Text("Subtotal", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(money(subtotal), fontWeight = FontWeight.Bold)
                 }
+                pricingNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
 
                 Box {
                     OutlinedButton(onClick = { customerMenu = true }, modifier = Modifier.fillMaxWidth()) {
@@ -158,6 +171,32 @@ fun PosCheckoutDialog(
                                     onClick = { bike = b; bikeMenu = false }
                                 )
                             }
+                        }
+                    }
+                }
+
+                if (!offlineMode) {
+                    HorizontalDivider()
+                    Text("Additional charge (optional)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        chargeName,
+                        { chargeName = it },
+                        label = { Text("Charge name, e.g. delivery / bag / handling") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        chargeAmountText,
+                        { chargeAmountText = it },
+                        label = { Text("Charge amount") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    if (charges.isNotEmpty()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Charges")
+                            Text(money(charges.sumOf { it.amount }), fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -234,6 +273,17 @@ fun PosCheckoutDialog(
                     )
                 }
 
+                if (payments.any { it.method == "credit" }) {
+                    OutlinedTextField(
+                        dueDate,
+                        { dueDate = it },
+                        label = { Text("Utang due date YYYY-MM-DD (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !offlineMode
+                    )
+                }
+
                 if (!storeCreditValid) {
                     Text(
                         "Store credit exceeds the customer's available balance.",
@@ -282,7 +332,9 @@ fun PosCheckoutDialog(
                         paymentModels,
                         discount,
                         tax,
-                        managerPin.trim().ifBlank { null }
+                        managerPin.trim().ifBlank { null },
+                        charges,
+                        dueDate.trim().ifBlank { null }
                     )
                 },
                 enabled = cart.isNotEmpty() && paymentValid && managerValid
