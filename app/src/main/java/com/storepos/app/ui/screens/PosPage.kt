@@ -363,7 +363,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
                     delay(650)
                     val checkoutResult = runCatching {
-                        RetailRepository.checkout(
+                        RetailRepository.finalizePayMongoCheckout(
                             shopId = context.shop.id,
                             cart = pending.soldCart,
                             customerId = pending.customerId,
@@ -404,9 +404,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     return@LaunchedEffect
                 }
                 "failed", "expired", "cancelled" -> {
+                    runCatching {
+                        RetailRepository.releasePayMongoStock(context.shop.id, pending.saleClientKey)
+                    }
                     paymongoFinalizeError =
                         "PayMongo checkout is " + remote.status.uppercase() +
-                            ". No StorePOS sale was created."
+                            ". Reserved stock was released and no StorePOS sale was created."
                     return@LaunchedEffect
                 }
                 else -> delay(2000)
@@ -1067,10 +1070,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 PayMongoRepository.cancelCheckout(context.shop.id, pending.sessionId)
                             }
                             if (cancelled.isSuccess) {
+                                runCatching {
+                                    RetailRepository.releasePayMongoStock(context.shop.id, pending.saleClientKey)
+                                }
                                 pendingPayMongo = null
                                 paymongoFinalizeError = null
                                 paymongoPaymentReceived = false
-                                error = "QR Ph payment cancelled. No StorePOS sale was created."
+                                error = "QR Ph payment cancelled. Reserved stock was released and no StorePOS sale was created."
                             } else {
                                 error = "Could not cancel QR because its payment status may have changed. StorePOS is checking it again."
                                 paymongoRetryNonce += 1
@@ -1117,7 +1123,21 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
                         val requestId = "SP-" + UUID.randomUUID().toString()
                         val saleClientKey = UUID.randomUUID().toString()
-                        runCatching {
+
+                        try {
+                            RetailRepository.holdPayMongoStock(
+                                shopId = context.shop.id,
+                                clientKey = saleClientKey,
+                                cart = soldCart,
+                                holdSeconds = 900
+                            )
+                        } catch (failure: Throwable) {
+                            error = "Cannot start QR Ph payment: " + StoreRepository.userMessage(failure) +
+                                ". Check stock availability before asking the customer to pay."
+                            return@launch
+                        }
+
+                        val started = try {
                             PayMongoRepository.createCheckout(
                                 shopId = context.shop.id,
                                 amount = paymongoPayment.amount,
@@ -1126,33 +1146,41 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 flow = "qrph",
                                 expirySeconds = 300
                             )
-                        }.onSuccess { started ->
-                            val qrImage = started.qrImageUrl
-                            if (qrImage.isNullOrBlank()) {
-                                error = "PayMongo did not return a QR Ph image. Retry the payment."
-                                return@onSuccess
+                        } catch (failure: Throwable) {
+                            runCatching {
+                                RetailRepository.releasePayMongoStock(context.shop.id, saleClientKey)
                             }
-                            pendingPayMongo = PendingPayMongoSale(
-                                sessionId = started.id,
-                                qrImageUrl = qrImage,
-                                expiresAt = started.expiresAt,
-                                requestId = started.clientReference,
-                                saleClientKey = saleClientKey,
-                                customerId = customerId,
-                                soldCart = soldCart,
-                                receiptCart = receiptCart,
-                                discount = discount,
-                                managerPin = managerPin,
-                                charges = charges,
-                                dueDate = dueDate,
-                                amount = paymongoPayment.amount
-                            )
-                            paymongoFinalizeError = null
-                            paymongoPaymentReceived = false
-                            checkout = false
-                        }.onFailure { failure ->
                             error = "Unable to generate QR Ph: " + StoreRepository.userMessage(failure)
+                            return@launch
                         }
+
+                        val qrImage = started.qrImageUrl
+                        if (qrImage.isNullOrBlank()) {
+                            runCatching {
+                                RetailRepository.releasePayMongoStock(context.shop.id, saleClientKey)
+                            }
+                            error = "PayMongo did not return a QR Ph image. Reserved stock was released. Retry the payment."
+                            return@launch
+                        }
+
+                        pendingPayMongo = PendingPayMongoSale(
+                            sessionId = started.id,
+                            qrImageUrl = qrImage,
+                            expiresAt = started.expiresAt,
+                            requestId = started.clientReference,
+                            saleClientKey = saleClientKey,
+                            customerId = customerId,
+                            soldCart = soldCart,
+                            receiptCart = receiptCart,
+                            discount = discount,
+                            managerPin = managerPin,
+                            charges = charges,
+                            dueDate = dueDate,
+                            amount = paymongoPayment.amount
+                        )
+                        paymongoFinalizeError = null
+                        paymongoPaymentReceived = false
+                        checkout = false
                         return@launch
                     }
 
