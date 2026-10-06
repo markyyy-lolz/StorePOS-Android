@@ -270,7 +270,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     suspend fun printSale(
         sale: Sale,
         soldCart: List<CartLine>,
-        payments: List<CheckoutPayment>
+        payments: List<CheckoutPayment>,
+        receiptToken: String? = null
     ): String {
         val address = prefs.getString("printer_address", null)
             ?: return "No receipt printer selected."
@@ -300,7 +301,10 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         receiptFooter = settings.receiptFooter,
                         payments = payments,
                         cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
-                        openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" }
+                        openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
+                        digitalReceiptUrl = receiptToken?.let {
+                            "https://storepos.2023107337.workers.dev/#/receipt/" + it
+                        }
                     )
                 )
             },
@@ -391,7 +395,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
                         if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
                             printing = true
-                            printMessage = printSale(result.sale, lastReceiptCart, lastPayments)
+                            printMessage = printSale(result.sale, lastReceiptCart, lastPayments, lastReceiptToken)
                             if (printMessage?.startsWith("Receipt sent") == true) receiptPrintedOnce = true
                             printing = false
                         }
@@ -794,12 +798,19 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         }
                     }
                     lastReceiptToken?.let { token ->
-                        val link = "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + token
-                        Text(
-                            "Digital receipt: " + link,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        val link = "https://storepos.2023107337.workers.dev/#/receipt/" + token
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                "Digital receipt: " + link,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Available for 3 days from purchase.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     printMessage?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -815,7 +826,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             printing = true
                             printMessage = null
                             scope.launch {
-                                val result = printSale(sale, lastReceiptCart, lastPayments)
+                                val result = printSale(sale, lastReceiptCart, lastPayments, lastReceiptToken)
                                 printMessage = result
                                 if (result.startsWith("Receipt sent")) {
                                     if (isReprint) {
@@ -1222,7 +1233,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
                         if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
                             printing = true
-                            printMessage = printSale(sale, lastReceiptCart, payments)
+                            printMessage = printSale(sale, lastReceiptCart, payments, lastReceiptToken)
                             if (printMessage?.startsWith("Receipt sent") == true) receiptPrintedOnce = true
                             printing = false
                         }
