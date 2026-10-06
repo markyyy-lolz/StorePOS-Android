@@ -55,7 +55,8 @@ private data class PendingPayMongoSale(
     val managerPin: String?,
     val charges: List<RetailCharge>,
     val dueDate: String?,
-    val amount: Double
+    val amount: Double,
+    val livemode: Boolean
 )
 
 private fun decodePayMongoQr(value: String?): androidx.compose.ui.graphics.ImageBitmap? {
@@ -1026,12 +1027,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    if (paymongoIntegration?.mode == "test") {
-                        AssistChip(
-                            onClick = {},
-                            label = { Text("PAYMONGO TEST MODE") }
-                        )
-                    }
+                    AssistChip(
+                        onClick = {},
+                        label = {
+                            Text(if (pending.livemode) "PAYMONGO LIVE MODE" else "PAYMONGO TEST MODE")
+                        }
+                    )
 
                     paymongoFinalizeError?.let {
                         Text(
@@ -1187,7 +1188,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             managerPin = managerPin,
                             charges = charges,
                             dueDate = dueDate,
-                            amount = paymongoPayment.amount
+                            amount = paymongoPayment.amount,
+                            livemode = started.livemode
                         )
                         paymongoFinalizeError = null
                         paymongoPaymentReceived = false
