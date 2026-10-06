@@ -305,7 +305,20 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
                         digitalReceiptUrl = receiptToken?.let {
                             "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
-                        }
+                        },
+                        shopAddress = context.shop.address,
+                        shopPhone = context.shop.phone,
+                        shopTin = context.shop.tin,
+                        receiptTitle = settings.receiptTitle,
+                        showAddress = settings.receiptShowAddress,
+                        showPhone = settings.receiptShowPhone,
+                        showTin = settings.receiptShowTin,
+                        showReceiptNumber = settings.receiptShowReceiptNumber,
+                        showDate = settings.receiptShowDate,
+                        showPaymentReference = settings.receiptShowPaymentReference,
+                        showDigitalQr = settings.receiptShowDigitalQr,
+                        compactMode = settings.receiptCompactMode,
+                        sectionOrder = settings.receiptSectionOrder
                     )
                 )
             },
