@@ -94,3 +94,12 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Thermal receipts can print a QR code for the secure digital receipt.
 - Digital receipt links expire after 3 days / 72 hours.
 - Expired digital receipt links show a dedicated privacy/security expiry page.
+
+
+## v1.4.0
+- New Receipt Designer with live 58mm/80mm-style thermal preview.
+- Per-shop receipt title, header, footer, visibility toggles and section ordering.
+- Receipt design applies to ESC/POS printing and StorePOS digital receipts.
+- Digital receipt QR can be enabled or disabled per shop.
+- Store identity stays first and Powered by StorePOS stays at the bottom.
+- Proper Android adaptive launcher icon fixes generic placeholder icons on tablets and POS terminals.
