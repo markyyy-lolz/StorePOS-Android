@@ -1,14 +1,13 @@
-# StorePOS v1.3.4
+# StorePOS v1.3.5
 
-StorePOS v1.3.4 fixes the blank Cloudflare Turnstile area on Android by loading a dedicated hosted verification page from the StorePOS domain.
+StorePOS v1.3.5 fixes the final Android Turnstile handoff issue where Cloudflare verification could show Success but the Sign in button remained disabled.
 
-## Android Turnstile Rendering Fix
-- Added a dedicated hosted Turnstile page on StorePOS Cloud for Android authentication.
-- Android now loads the real StorePOS HTTPS origin instead of injecting an inline HTML challenge.
-- Fixes the blank security-verification area seen in v1.3.3.
-- Successful Turnstile verification sends the token directly back to Android.
-- Sign in / Create account becomes available after a valid token is received.
-- Expired, timed-out, or failed verification clears the token and requires a fresh challenge.
+## Android Turnstile Token Handoff Fix
+- Hosted StorePOS Turnstile now redirects through a StorePOS callback URL after successful verification.
+- Android WebView intercepts the callback URL and reads the verified CAPTCHA token directly.
+- Removes reliance on the JavaScript bridge for enabling the Sign in button.
+- Sign in / Create account becomes available immediately after a valid token is received.
+- Expired, timed-out, or failed verification still requires a fresh challenge.
 - Supabase CAPTCHA protection remains enabled.
 
 ## Existing StorePOS Features
@@ -21,6 +20,6 @@ StorePOS v1.3.4 fixes the blank Cloudflare Turnstile area on Android by loading 
 ## Compatibility
 - Android 8.0+ (minSdk 26)
 - Package: `com.storepos.app`
-- Version code: 9
-- Version name: `1.3.4`
+- Version code: 10
+- Version name: `1.3.5`
 - Existing shops, users, products, licenses and transaction data are preserved.
