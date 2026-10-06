@@ -78,3 +78,11 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Uses a StorePOS callback URL intercepted directly by Android WebView.
 - Enables Sign in immediately after Android receives a valid CAPTCHA token.
 - Keeps Supabase CAPTCHA protection enabled.
+
+
+## v1.3.6
+- Reserves inventory before generating a PayMongo QR Ph payment.
+- Blocks QR creation when live stock is insufficient.
+- Releases reserved stock on failed, cancelled, expired, or QR-generation-failed payments.
+- Finalizes verified PayMongo payments atomically against the reserved stock.
+- Supports base quantities for pack/tingi products and reserves selected serial numbers.
