@@ -10,6 +10,7 @@ import android.webkit.WebViewClient
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,12 +25,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.storepos.app.R
 import kotlinx.coroutines.delay
 
 private const val TURNSTILE_PAGE_URL = "https://storepos.2023107337.workers.dev/turnstile.html"
@@ -206,21 +210,14 @@ fun AuthScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Surface(
-                    modifier = Modifier.size(58.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.primary
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Rounded.Storefront,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                }
-
-                Text("StorePOS", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
+                Image(
+                    painter = painterResource(R.drawable.storepos_brand_logo),
+                    contentDescription = "StorePOS",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 108.dp, max = 150.dp),
+                    contentScale = ContentScale.Fit
+                )
                 Text(
                     if (signUp) "Create the owner account for your retail store."
                     else "Sign in to manage sales, inventory and your retail store.",
