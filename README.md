@@ -86,3 +86,11 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Releases reserved stock on failed, cancelled, expired, or QR-generation-failed payments.
 - Finalizes verified PayMongo payments atomically against the reserved stock.
 - Supports base quantities for pack/tingi products and reserves selected serial numbers.
+
+
+## v1.3.7
+- Professional customer receipt layout with client store branding first and subtle StorePOS footer branding.
+- PayMongo QR Ph customer-facing receipt label changed to ORPH.
+- Thermal receipts can print a QR code for the secure digital receipt.
+- Digital receipt links expire after 3 days / 72 hours.
+- Expired digital receipt links show a dedicated privacy/security expiry page.
