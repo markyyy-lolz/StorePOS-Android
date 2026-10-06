@@ -304,7 +304,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
                         openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
                         digitalReceiptUrl = receiptToken?.let {
-                            "https://storepos.2023107337.workers.dev/#/receipt/" + it
+                            "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
                         }
                     )
                 )
@@ -799,7 +799,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         }
                     }
                     lastReceiptToken?.let { token ->
-                        val link = "https://storepos.2023107337.workers.dev/#/receipt/" + token
+                        val link = "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + token
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(
                                 "Digital receipt: " + link,
