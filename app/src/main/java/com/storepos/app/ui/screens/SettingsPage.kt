@@ -32,6 +32,7 @@ fun SettingsPage(context: ShopContext) {
     var latest by remember { mutableStateOf<AppVersion?>(null) }
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var posSettingsOpen by remember { mutableStateOf(false) }
+    var receiptDesignerOpen by remember { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -105,6 +106,30 @@ fun SettingsPage(context: ShopContext) {
             )
             Button(onClick = { posSettingsOpen = true }) {
                 Text("Configure POS")
+            }
+        }
+
+        MotoCard(Modifier.fillMaxWidth()) {
+            Text("Receipt Designer", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                "Customize receipt content, ORPH details, QR visibility, section order and customer-facing store information with a live thermal preview.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { receiptDesignerOpen = true }) {
+                    Text("Open Receipt Designer")
+                }
+                AssistChip(
+                    onClick = {},
+                    label = {
+                        Text(
+                            if (posSettings.receiptShowDigitalQr)
+                                "Digital QR on"
+                            else
+                                "Digital QR off"
+                        )
+                    }
+                )
             }
         }
 
@@ -188,6 +213,31 @@ fun SettingsPage(context: ShopContext) {
                 checking = false
             }
         }
+    if (receiptDesignerOpen) {
+        val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
+        val previewPaperWidth = prefs.getInt("paper_width", posSettings.printerPaperWidthMm)
+        ReceiptDesignerDialog(
+            shop = context.shop,
+            settings = posSettings,
+            paperWidthMm = previewPaperWidth,
+            saving = savingSettings,
+            onDismiss = { if (!savingSettings) receiptDesignerOpen = false },
+            onSave = { updated ->
+                savingSettings = true
+                error = null
+                scope.launch {
+                    runCatching { StoreRepository.updateShopSettings(updated) }
+                        .onSuccess {
+                            posSettings = updated
+                            receiptDesignerOpen = false
+                        }
+                        .onFailure { error = StoreRepository.userMessage(it) }
+                    savingSettings = false
+                }
+            }
+        )
+    }
+
     if (posSettingsOpen) {
         PosSystemSettingsDialog(
             settings = posSettings,
