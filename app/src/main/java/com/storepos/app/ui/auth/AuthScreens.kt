@@ -2,6 +2,7 @@ package com.storepos.app.ui.auth
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.net.Uri
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -118,10 +119,33 @@ private fun TurnstileChallenge(
                             "StorePosCaptcha"
                         )
 
-                        webViewClient = WebViewClient()
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView,
+                                request: android.webkit.WebResourceRequest
+                            ): Boolean {
+                                val uri = request.url
+                                if (uri.scheme == "storepos" && uri.host == "turnstile") {
+                                    val token = uri.getQueryParameter("token").orEmpty()
+                                    if (token.isNotBlank()) onToken(token)
+                                    return true
+                                }
+                                return false
+                            }
+
+                            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                                val uri = runCatching { Uri.parse(url) }.getOrNull()
+                                if (uri?.scheme == "storepos" && uri.host == "turnstile") {
+                                    val token = uri.getQueryParameter("token").orEmpty()
+                                    if (token.isNotBlank()) onToken(token)
+                                    return true
+                                }
+                                return false
+                            }
+                        }
 
                         val mode = if (signUp) "signup" else "signin"
-                        loadUrl("$TURNSTILE_PAGE_URL?mode=$mode&v=2")
+                        loadUrl("$TURNSTILE_PAGE_URL?mode=$mode&v=3")
                     }
                 },
                 update = { view ->
