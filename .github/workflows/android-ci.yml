@@ -48,13 +48,19 @@ jobs:
           fi
 
       - name: Unit tests and lint
-        run: gradle :app:testDebugUnitTest :app:lintDebug --stacktrace
+        run: gradle :app:testDebugUnitTest :app:lintDebug :launcher:testDebugUnitTest :launcher:lintDebug --stacktrace
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleDebug :launcher:assembleDebug --stacktrace
 
-      - name: Upload debug APK
+      - name: Upload StorePOS debug APK
         uses: actions/upload-artifact@v4
         with:
           name: StorePOS-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload StorePOS Terminal Launcher debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StorePOS-Terminal-Launcher-debug
+          path: launcher/build/outputs/apk/debug/launcher-debug.apk

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">StorePOS Terminal</string>
+    <string name="device_admin_description">Allows StorePOS Terminal to enable dedicated-device kiosk controls when provisioned as Device Owner.</string>
+</resources>

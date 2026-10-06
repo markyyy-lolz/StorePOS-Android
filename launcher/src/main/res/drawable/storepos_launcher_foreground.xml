@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="82dp"
+        android:height="82dp"
+        android:gravity="center">
+        <bitmap
+            android:src="@drawable/storepos_app_icon"
+            android:gravity="fill"
+            android:antialias="true"
+            android:filter="true" />
+    </item>
+</layer-list>

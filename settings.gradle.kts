@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "StorePOS"
 include(":app")
+include(":launcher")
