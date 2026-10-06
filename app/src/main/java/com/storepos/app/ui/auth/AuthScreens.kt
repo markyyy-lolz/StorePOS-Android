@@ -6,6 +6,8 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -29,16 +31,96 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 
-private const val STOREPOS_LOGIN_URL = "https://storepos.2023107337.workers.dev/#/login"
-private const val STOREPOS_SIGNUP_URL = "https://storepos.2023107337.workers.dev/#/login?mode=signup"
+private const val TURNSTILE_SITE_KEY = "0x4AAAAAAFORduMdXxtZDB1o"
+private const val TURNSTILE_BASE_URL = "https://storepos.2023107337.workers.dev/"
 
 private class TurnstileBridge(
-    private val onToken: (String) -> Unit
+    private val onToken: (String) -> Unit,
+    private val onExpired: () -> Unit
 ) {
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     @JavascriptInterface
     fun onToken(token: String) {
-        if (token.isNotBlank()) onToken(token)
+        if (token.isBlank()) return
+        mainHandler.post { onToken(token) }
     }
+
+    @JavascriptInterface
+    fun onExpired() {
+        mainHandler.post(onExpired)
+    }
+}
+
+private fun turnstileHtml(signUp: Boolean): String {
+    val action = if (signUp) "storepos_signup" else "storepos_signin"
+    return """
+        <!doctype html>
+        <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+          <style>
+            html, body {
+              width: 100%;
+              height: 100%;
+              margin: 0;
+              padding: 0;
+              background: transparent;
+              overflow: hidden;
+            }
+            body {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+            #turnstile-container {
+              min-height: 65px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+          </style>
+          <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
+        </head>
+        <body>
+          <div id="turnstile-container"></div>
+          <script>
+            (function () {
+              function renderChallenge() {
+                if (!window.turnstile) {
+                  setTimeout(renderChallenge, 100);
+                  return;
+                }
+
+                window.turnstile.render('#turnstile-container', {
+                  sitekey: '${TURNSTILE_SITE_KEY}',
+                  theme: 'light',
+                  size: 'flexible',
+                  action: '${action}',
+                  callback: function (token) {
+                    if (window.StorePosCaptcha && window.StorePosCaptcha.onToken) {
+                      window.StorePosCaptcha.onToken(token);
+                    }
+                  },
+                  'expired-callback': function () {
+                    if (window.StorePosCaptcha && window.StorePosCaptcha.onExpired) {
+                      window.StorePosCaptcha.onExpired();
+                    }
+                  },
+                  'error-callback': function () {
+                    if (window.StorePosCaptcha && window.StorePosCaptcha.onExpired) {
+                      window.StorePosCaptcha.onExpired();
+                    }
+                  }
+                });
+              }
+
+              renderChallenge();
+            })();
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -47,7 +129,8 @@ private fun TurnstileChallenge(
     signUp: Boolean,
     refreshKey: Int,
     enabled: Boolean,
-    onToken: (String) -> Unit
+    onToken: (String) -> Unit,
+    onExpired: () -> Unit
 ) {
     val context = LocalContext.current
     val surfaceColor = MaterialTheme.colorScheme.surface.toArgb()
@@ -73,7 +156,7 @@ private fun TurnstileChallenge(
             AndroidView(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(92.dp),
+                    .height(88.dp),
                 factory = {
                     WebView(context).apply {
                         webView = this
@@ -86,104 +169,28 @@ private fun TurnstileChallenge(
                         settings.loadWithOverviewMode = true
                         settings.useWideViewPort = true
                         settings.allowFileAccess = false
-                        settings.allowContentAccess = true
+                        settings.allowContentAccess = false
 
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
-                        addJavascriptInterface(TurnstileBridge(onToken), "StorePosCaptcha")
+                        addJavascriptInterface(
+                            TurnstileBridge(
+                                onToken = onToken,
+                                onExpired = onExpired
+                            ),
+                            "StorePosCaptcha"
+                        )
 
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView, url: String) {
-                                super.onPageFinished(view, url)
-                                val script = """
-                                    (function () {
-                                      if (window.__storePosNativeCaptchaStarted) return;
-                                      window.__storePosNativeCaptchaStarted = true;
+                        webViewClient = WebViewClient()
 
-                                      const style = document.createElement('style');
-                                      style.textContent = `
-                                        html, body, #app {
-                                          background: transparent !important;
-                                          min-height: 0 !important;
-                                          height: auto !important;
-                                          overflow: hidden !important;
-                                        }
-                                        .auth-wrap {
-                                          display: block !important;
-                                          min-height: 0 !important;
-                                          height: auto !important;
-                                          background: transparent !important;
-                                        }
-                                        .auth-art,
-                                        .auth-card > h2,
-                                        .auth-card > p,
-                                        .auth-card .segment,
-                                        #auth-form > .field,
-                                        #auth-form > button,
-                                        #auth-form > a,
-                                        #auth-form > .help {
-                                          display: none !important;
-                                        }
-                                        .auth-side {
-                                          display: block !important;
-                                          min-height: 0 !important;
-                                          height: auto !important;
-                                          padding: 0 !important;
-                                          background: transparent !important;
-                                        }
-                                        .auth-card {
-                                          width: 100% !important;
-                                          max-width: none !important;
-                                          margin: 0 !important;
-                                          padding: 8px 0 0 0 !important;
-                                          border: 0 !important;
-                                          box-shadow: none !important;
-                                          background: transparent !important;
-                                        }
-                                        #auth-form {
-                                          display: block !important;
-                                          margin: 0 !important;
-                                          padding: 0 !important;
-                                        }
-                                        .turnstile-wrap {
-                                          display: flex !important;
-                                          align-items: center !important;
-                                          justify-content: center !important;
-                                          min-height: 70px !important;
-                                          margin: 0 !important;
-                                          padding: 0 !important;
-                                          border: 0 !important;
-                                          background: transparent !important;
-                                        }
-                                        .turnstile-wrap > .help {
-                                          display: none !important;
-                                        }
-                                      `;
-                                      document.head.appendChild(style);
-
-                                      let lastToken = '';
-                                      const timer = setInterval(function () {
-                                        const field = document.querySelector('input[name="cf-turnstile-response"]');
-                                        const token = field && field.value ? field.value : '';
-                                        if (token && token !== lastToken) {
-                                          lastToken = token;
-                                          if (window.StorePosCaptcha && window.StorePosCaptcha.onToken) {
-                                            window.StorePosCaptcha.onToken(token);
-                                          }
-                                        }
-                                      }, 250);
-
-                                      window.addEventListener('beforeunload', function () {
-                                        clearInterval(timer);
-                                      }, { once: true });
-                                    })();
-                                """.trimIndent()
-                                view.evaluateJavascript(script, null)
-                            }
-                        }
-
-                        loadUrl(if (signUp) STOREPOS_SIGNUP_URL else STOREPOS_LOGIN_URL)
+                        loadDataWithBaseURL(
+                            TURNSTILE_BASE_URL,
+                            turnstileHtml(signUp),
+                            "text/html",
+                            "UTF-8",
+                            null
+                        )
                     }
                 },
                 update = { view ->
@@ -315,7 +322,8 @@ fun AuthScreen(
                         signUp = signUp,
                         refreshKey = challengeRefreshKey,
                         enabled = !busy,
-                        onToken = { token -> captchaToken = token }
+                        onToken = { token -> captchaToken = token },
+                        onExpired = { captchaToken = null }
                     )
                     Text(
                         if (captchaToken.isNullOrBlank())
