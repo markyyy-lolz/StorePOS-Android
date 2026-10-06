@@ -126,7 +126,7 @@ fun StorePosApp() {
             busy = busy,
             error = error,
             notice = notice,
-            onSubmit = { displayName, email, password, signUp ->
+            onSubmit = { displayName, email, password, signUp, captchaToken ->
                 scope.launch {
                     busy = true
                     error = null
@@ -134,10 +134,10 @@ fun StorePosApp() {
 
                     runCatching {
                         if (signUp) {
-                            StoreRepository.signUp(displayName, email, password)
+                            StoreRepository.signUp(displayName, email, password, captchaToken)
                             StoreRepository.currentUserId() != null
                         } else {
-                            StoreRepository.signIn(email, password)
+                            StoreRepository.signIn(email, password, captchaToken)
                             true
                         }
                     }.onSuccess { hasSession ->
