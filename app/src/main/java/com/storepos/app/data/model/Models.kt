@@ -11,6 +11,7 @@ data class Shop(
     val phone: String? = null,
     val email: String? = null,
     val address: String? = null,
+    val tin: String? = null,
     @SerialName("currency_code") val currencyCode: String = "PHP",
     val timezone: String = "Asia/Manila",
     @SerialName("logo_url") val logoUrl: String? = null,
@@ -733,7 +734,20 @@ data class ShopSettings(
     @SerialName("manager_pin_for_discount") val managerPinForDiscount: Boolean = true,
     @SerialName("allow_hold_sales") val allowHoldSales: Boolean = true,
     @SerialName("cash_drawer_enabled") val cashDrawerEnabled: Boolean = false,
-    @SerialName("receipt_show_cashier") val receiptShowCashier: Boolean = true
+    @SerialName("receipt_show_cashier") val receiptShowCashier: Boolean = true,
+    @SerialName("receipt_title") val receiptTitle: String = "SALES RECEIPT",
+    @SerialName("receipt_show_logo") val receiptShowLogo: Boolean = false,
+    @SerialName("receipt_show_address") val receiptShowAddress: Boolean = true,
+    @SerialName("receipt_show_phone") val receiptShowPhone: Boolean = true,
+    @SerialName("receipt_show_tin") val receiptShowTin: Boolean = true,
+    @SerialName("receipt_show_receipt_number") val receiptShowReceiptNumber: Boolean = true,
+    @SerialName("receipt_show_date") val receiptShowDate: Boolean = true,
+    @SerialName("receipt_show_payment_reference") val receiptShowPaymentReference: Boolean = true,
+    @SerialName("receipt_show_digital_qr") val receiptShowDigitalQr: Boolean = true,
+    @SerialName("receipt_compact_mode") val receiptCompactMode: Boolean = false,
+    @SerialName("receipt_section_order") val receiptSectionOrder: List<String> = listOf(
+        "store", "meta", "items", "totals", "payment", "digital", "footer"
+    )
 )
 
 @Serializable
