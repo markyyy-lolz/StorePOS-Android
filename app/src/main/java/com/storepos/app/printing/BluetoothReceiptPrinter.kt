@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.nio.charset.Charset
 import java.util.UUID
@@ -80,10 +81,28 @@ class BluetoothReceiptPrinter(
             payments: List<com.storepos.app.data.model.CheckoutPayment> = emptyList(),
             cashierLabel: String? = null,
             openCashDrawer: Boolean = false,
-            digitalReceiptUrl: String? = null
+            digitalReceiptUrl: String? = null,
+            shopAddress: String? = null,
+            shopPhone: String? = null,
+            shopTin: String? = null,
+            receiptTitle: String = "SALES RECEIPT",
+            showAddress: Boolean = true,
+            showPhone: Boolean = true,
+            showTin: Boolean = true,
+            showReceiptNumber: Boolean = true,
+            showDate: Boolean = true,
+            showPaymentReference: Boolean = true,
+            showDigitalQr: Boolean = true,
+            compactMode: Boolean = false,
+            sectionOrder: List<String> = listOf(
+                "store", "meta", "items", "totals", "payment", "digital", "footer"
+            )
         ): ByteArray {
             val charset = Charset.forName("CP437")
             val width = if (paperWidth == 58) 32 else 48
+            val divider = if (compactMode) "-".repeat(width) else "=".repeat(width)
+            val thin = "-".repeat(width)
+
             fun amount(value: Double): String =
                 "PHP " + String.format(java.util.Locale.US, "%,.2f", value)
 
@@ -103,89 +122,130 @@ class BluetoothReceiptPrinter(
                 } else ref
             }
 
-            val beforeQr = mutableListOf<String>()
-            beforeQr += center(shopName, width)
-            receiptHeader?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
-                beforeQr += center(it, width)
-            }
-            beforeQr += center("SALES RECEIPT", width)
-            beforeQr += center("NOT AN OFFICIAL TAX RECEIPT", width)
-            beforeQr += "=".repeat(width)
-            beforeQr += "Receipt No: " + sale.saleNumber
-            sale.createdAt?.let { beforeQr += "Date: " + it.replace("T", " ").take(19) }
-            cashierLabel?.let { beforeQr += "Cashier: " + it.take((width - 9).coerceAtLeast(1)) }
-            beforeQr += "-".repeat(width)
+            fun textBytes(lines: List<String>): ByteArray =
+                lines.joinToString("\n", postfix = "\n").toByteArray(charset)
 
-            cart.forEach { line ->
-                val qty = if (line.quantity % 1.0 == 0.0) {
-                    line.quantity.toInt().toString()
+            val sections = linkedMapOf<String, List<String>>()
+
+            sections["store"] = buildList {
+                add(center(shopName, width))
+                if (showAddress) shopAddress?.trim()?.takeIf { it.isNotBlank() }?.let { add(center(it, width)) }
+                if (showPhone) shopPhone?.trim()?.takeIf { it.isNotBlank() }?.let { add(center("Contact: $it", width)) }
+                if (showTin) shopTin?.trim()?.takeIf { it.isNotBlank() }?.let { add(center("TIN: $it", width)) }
+                receiptHeader?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
+                    add(center(it, width))
+                }
+                add(center(receiptTitle.trim().ifBlank { "SALES RECEIPT" }, width))
+                add(center("NOT AN OFFICIAL TAX RECEIPT", width))
+                add(divider)
+            }
+
+            sections["meta"] = buildList {
+                if (showReceiptNumber) add("Receipt No: " + sale.saleNumber)
+                if (showDate) sale.createdAt?.let { add("Date: " + it.replace("T", " ").take(19)) }
+                cashierLabel?.let { add("Cashier: " + it.take((width - 9).coerceAtLeast(1))) }
+                add(thin)
+            }
+
+            sections["items"] = buildList {
+                cart.forEach { line ->
+                    val qty = if (line.quantity % 1.0 == 0.0) {
+                        line.quantity.toInt().toString()
+                    } else {
+                        String.format(java.util.Locale.US, "%.3f", line.quantity)
+                            .trimEnd('0')
+                            .trimEnd('.')
+                    }
+                    add(line.product.name.take(width))
+                    val left = qty + " x " + amount(line.unitPrice)
+                    val right = amount(line.lineTotal)
+                    val spaces = (width - left.length - right.length).coerceAtLeast(1)
+                    add((left + " ".repeat(spaces) + right).take(width))
+                }
+                add(thin)
+            }
+
+            sections["totals"] = buildList {
+                add(fitPair("Subtotal", amount(sale.subtotal), width))
+                if (sale.discountAmount > 0) add(fitPair("Discount", "-" + amount(sale.discountAmount), width))
+                if (sale.taxAmount > 0) add(fitPair("Tax", amount(sale.taxAmount), width))
+                add(fitPair("TOTAL", amount(sale.totalAmount), width))
+                add(divider)
+            }
+
+            sections["payment"] = buildList {
+                if (payments.isNotEmpty()) {
+                    add("PAYMENT DETAILS")
+                    payments.forEach { payment ->
+                        add(fitPair(customerPaymentLabel(payment), amount(payment.amount), width))
+                        add(fitPair("Status", "PAID", width))
+                        if (showPaymentReference) {
+                            customerReference(payment)?.let { add(("Ref: " + it).take(width)) }
+                        }
+                        if (payment.method == "cash" && payment.tendered != null) {
+                            add(fitPair("Cash tendered", amount(payment.tendered), width))
+                        }
+                    }
                 } else {
-                    String.format(java.util.Locale.US, "%.3f", line.quantity).trimEnd('0').trimEnd('.')
+                    sale.amountTendered?.let { add(fitPair("Tendered", amount(it), width)) }
                 }
-                beforeQr += line.product.name.take(width)
-                val left = qty + " x " + amount(line.unitPrice)
-                val right = amount(line.lineTotal)
-                val spaces = (width - left.length - right.length).coerceAtLeast(1)
-                beforeQr += (left + " ".repeat(spaces) + right).take(width)
-            }
-
-            beforeQr += "-".repeat(width)
-            beforeQr += fitPair("Subtotal", amount(sale.subtotal), width)
-            if (sale.discountAmount > 0) beforeQr += fitPair("Discount", "-" + amount(sale.discountAmount), width)
-            if (sale.taxAmount > 0) beforeQr += fitPair("Tax", amount(sale.taxAmount), width)
-            beforeQr += fitPair("TOTAL", amount(sale.totalAmount), width)
-            beforeQr += "=".repeat(width)
-
-            if (payments.isNotEmpty()) {
-                beforeQr += "PAYMENT DETAILS"
-                payments.forEach { payment ->
-                    beforeQr += fitPair(customerPaymentLabel(payment), amount(payment.amount), width)
-                    beforeQr += fitPair("Status", "PAID", width)
-                    customerReference(payment)?.let {
-                        beforeQr += ("Ref: " + it).take(width)
-                    }
-                    if (payment.method == "cash" && payment.tendered != null) {
-                        beforeQr += fitPair("Cash tendered", amount(payment.tendered), width)
-                    }
+                sale.changeDue?.takeIf { it > 0 }?.let {
+                    add(fitPair("CHANGE", amount(it), width))
                 }
-            } else {
-                sale.amountTendered?.let { beforeQr += fitPair("Tendered", amount(it), width) }
             }
 
-            sale.changeDue?.takeIf { it > 0 }?.let {
-                beforeQr += fitPair("CHANGE", amount(it), width)
+            sections["footer"] = buildList {
+                add(thin)
+                receiptFooter?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
+                    add(center(it, width))
+                } ?: run {
+                    add(center("Thank you for your purchase.", width))
+                    add(center("Please come again.", width))
+                }
+                add(thin)
+                add(center("Powered by StorePOS", width))
+                add(center("Retail Management & POS System", width))
             }
 
-            val afterQr = mutableListOf<String>()
-            if (!digitalReceiptUrl.isNullOrBlank()) {
-                beforeQr += "-".repeat(width)
-                beforeQr += center("DIGITAL RECEIPT", width)
-                afterQr += center("Scan to view your digital receipt", width)
-                afterQr += center("Available for 3 days only.", width)
+            val editable = listOf("meta", "items", "totals", "payment", "digital")
+            val normalizedMiddle = sectionOrder
+                .filter { it in editable }
+                .distinct()
+                .toMutableList()
+                .also { current ->
+                    editable.filterNot { it in current }.forEach(current::add)
+                }
+            val normalizedOrder = listOf("store") + normalizedMiddle + listOf("footer")
+
+            val out = ByteArrayOutputStream()
+            out.write(byteArrayOf(0x1B, 0x40))
+
+            if (openCashDrawer) {
+                out.write(byteArrayOf(0x1B, 0x70, 0x00, 0x19, 0xFA.toByte()))
             }
 
-            afterQr += "-".repeat(width)
-            receiptFooter?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
-                afterQr += center(it, width)
-            } ?: run {
-                afterQr += center("Thank you for your purchase.", width)
-                afterQr += center("Please come again.", width)
+            normalizedOrder.forEach { key ->
+                if (key == "digital") {
+                    if (showDigitalQr && !digitalReceiptUrl.isNullOrBlank()) {
+                        out.write(textBytes(listOf(
+                            thin,
+                            center("DIGITAL RECEIPT", width)
+                        )))
+                        out.write(escPosQrCode(digitalReceiptUrl, if (paperWidth == 58) 4 else 6))
+                        out.write(textBytes(listOf(
+                            center("Scan to view your digital receipt", width),
+                            center("Available for 3 days only.", width)
+                        )))
+                    }
+                } else {
+                    val lines = sections[key].orEmpty()
+                    if (lines.isNotEmpty()) out.write(textBytes(lines))
+                }
             }
-            afterQr += "-".repeat(width)
-            afterQr += center("Powered by StorePOS", width)
-            afterQr += center("Retail Management & POS System", width)
 
-            val init = byteArrayOf(0x1B, 0x40)
-            val drawer = if (openCashDrawer) {
-                byteArrayOf(0x1B, 0x70, 0x00, 0x19, 0xFA.toByte())
-            } else byteArrayOf()
-            val beforeBody = beforeQr.joinToString("\n", postfix = "\n").toByteArray(charset)
-            val qr = digitalReceiptUrl?.takeIf { it.isNotBlank() }?.let {
-                escPosQrCode(it, if (paperWidth == 58) 4 else 6)
-            } ?: byteArrayOf()
-            val afterBody = afterQr.joinToString("\n", postfix = "\n\n\n").toByteArray(charset)
-            val cut = byteArrayOf(0x1D, 0x56, 0x00)
-            return init + drawer + beforeBody + qr + afterBody + cut
+            out.write("\n\n".toByteArray(charset))
+            out.write(byteArrayOf(0x1D, 0x56, 0x00))
+            return out.toByteArray()
         }
 
         private fun escPosQrCode(value: String, moduleSize: Int): ByteArray {
