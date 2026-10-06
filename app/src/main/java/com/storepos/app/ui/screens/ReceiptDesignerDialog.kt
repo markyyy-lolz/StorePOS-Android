@@ -118,7 +118,9 @@ fun ReceiptDesignerDialog(
                             horizontalArrangement = Arrangement.spacedBy(18.dp)
                         ) {
                             ReceiptDesignerControls(
-                                modifier = Modifier.weight(0.46f),
+                                modifier = Modifier
+                                    .weight(0.46f)
+                                    .verticalScroll(rememberScrollState()),
                                 shop = shop,
                                 title = title,
                                 onTitle = { title = it },
@@ -303,7 +305,7 @@ private fun ReceiptDesignerControls(
     onMove: (Int, Int) -> Unit
 ) {
     Column(
-        modifier.verticalScroll(rememberScrollState()),
+        modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("Content", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
