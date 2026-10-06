@@ -57,3 +57,10 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Sends verified CAPTCHA tokens with Supabase email/password authentication.
 - Improves CAPTCHA failure/expiry messaging and refresh behavior.
 - Uses the production StorePOS Cloud confirmation URL for new Android sign-ups.
+
+
+## v1.3.3
+- Fixed the Android Turnstile success callback so verified users can immediately press Sign in.
+- Uses a dedicated Turnstile WebView instead of polling a hidden token from the StorePOS website.
+- Correctly clears expired/failed CAPTCHA tokens.
+- Removes unrelated website/footer content from the Android security-verification area.
