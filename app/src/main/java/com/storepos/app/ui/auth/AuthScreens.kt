@@ -31,12 +31,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 
-private const val TURNSTILE_SITE_KEY = "0x4AAAAAAFORduMdXxtZDB1o"
-private const val TURNSTILE_BASE_URL = "https://storepos.2023107337.workers.dev/"
+private const val TURNSTILE_PAGE_URL = "https://storepos.2023107337.workers.dev/turnstile.html"
 
 private class TurnstileBridge(
     private val onToken: (String) -> Unit,
-    private val onExpired: () -> Unit
+    private val onExpired: () -> Unit,
+    private val onError: (String) -> Unit
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -50,77 +50,11 @@ private class TurnstileBridge(
     fun onExpired() {
         mainHandler.post(onExpired)
     }
-}
 
-private fun turnstileHtml(signUp: Boolean): String {
-    val action = if (signUp) "storepos_signup" else "storepos_signin"
-    return """
-        <!doctype html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-          <style>
-            html, body {
-              width: 100%;
-              height: 100%;
-              margin: 0;
-              padding: 0;
-              background: transparent;
-              overflow: hidden;
-            }
-            body {
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
-            #turnstile-container {
-              min-height: 65px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
-          </style>
-          <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
-        </head>
-        <body>
-          <div id="turnstile-container"></div>
-          <script>
-            (function () {
-              function renderChallenge() {
-                if (!window.turnstile) {
-                  setTimeout(renderChallenge, 100);
-                  return;
-                }
-
-                window.turnstile.render('#turnstile-container', {
-                  sitekey: '${TURNSTILE_SITE_KEY}',
-                  theme: 'light',
-                  size: 'flexible',
-                  action: '${action}',
-                  callback: function (token) {
-                    if (window.StorePosCaptcha && window.StorePosCaptcha.onToken) {
-                      window.StorePosCaptcha.onToken(token);
-                    }
-                  },
-                  'expired-callback': function () {
-                    if (window.StorePosCaptcha && window.StorePosCaptcha.onExpired) {
-                      window.StorePosCaptcha.onExpired();
-                    }
-                  },
-                  'error-callback': function () {
-                    if (window.StorePosCaptcha && window.StorePosCaptcha.onExpired) {
-                      window.StorePosCaptcha.onExpired();
-                    }
-                  }
-                });
-              }
-
-              renderChallenge();
-            })();
-          </script>
-        </body>
-        </html>
-    """.trimIndent()
+    @JavascriptInterface
+    fun onError(message: String) {
+        mainHandler.post { onError(message) }
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -130,7 +64,8 @@ private fun TurnstileChallenge(
     refreshKey: Int,
     enabled: Boolean,
     onToken: (String) -> Unit,
-    onExpired: () -> Unit
+    onExpired: () -> Unit,
+    onError: (String) -> Unit
 ) {
     val context = LocalContext.current
     val surfaceColor = MaterialTheme.colorScheme.surface.toArgb()
@@ -177,20 +112,16 @@ private fun TurnstileChallenge(
                         addJavascriptInterface(
                             TurnstileBridge(
                                 onToken = onToken,
-                                onExpired = onExpired
+                                onExpired = onExpired,
+                                onError = onError
                             ),
                             "StorePosCaptcha"
                         )
 
                         webViewClient = WebViewClient()
 
-                        loadDataWithBaseURL(
-                            TURNSTILE_BASE_URL,
-                            turnstileHtml(signUp),
-                            "text/html",
-                            "UTF-8",
-                            null
-                        )
+                        val mode = if (signUp) "signup" else "signin"
+                        loadUrl("$TURNSTILE_PAGE_URL?mode=$mode&v=2")
                     }
                 },
                 update = { view ->
@@ -323,7 +254,11 @@ fun AuthScreen(
                         refreshKey = challengeRefreshKey,
                         enabled = !busy,
                         onToken = { token -> captchaToken = token },
-                        onExpired = { captchaToken = null }
+                        onExpired = { captchaToken = null },
+                        onError = {
+                            captchaToken = null
+                            challengeRefreshKey += 1
+                        }
                     )
                     Text(
                         if (captchaToken.isNullOrBlank())
