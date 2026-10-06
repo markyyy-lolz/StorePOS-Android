@@ -49,3 +49,11 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Payment received state, QR expiry, cancellation safety, and retry-safe sale finalization.
 - Per-client PayMongo merchant accounts through the Custom StorePOS license module.
 - Owner/Admin credential setup with server-side secret handling and Supabase Vault encryption.
+
+
+## v1.3.2
+- Added Cloudflare Turnstile verification directly to Android sign-in and sign-up.
+- Fixes Android `captcha_failed` errors while keeping Supabase CAPTCHA protection enabled.
+- Sends verified CAPTCHA tokens with Supabase email/password authentication.
+- Improves CAPTCHA failure/expiry messaging and refresh behavior.
+- Uses the production StorePOS Cloud confirmation URL for new Android sign-ups.
