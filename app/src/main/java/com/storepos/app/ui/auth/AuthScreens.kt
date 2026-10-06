@@ -1,5 +1,12 @@
 package com.storepos.app.ui.auth
 
+import android.annotation.SuppressLint
+import android.graphics.Color
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,29 +20,214 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
+
+private const val STOREPOS_LOGIN_URL = "https://storepos.2023107337.workers.dev/#/login"
+private const val STOREPOS_SIGNUP_URL = "https://storepos.2023107337.workers.dev/#/login?mode=signup"
+
+private class TurnstileBridge(
+    private val onToken: (String) -> Unit
+) {
+    @JavascriptInterface
+    fun onToken(token: String) {
+        if (token.isNotBlank()) onToken(token)
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun TurnstileChallenge(
+    signUp: Boolean,
+    refreshKey: Int,
+    enabled: Boolean,
+    onToken: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val surfaceColor = MaterialTheme.colorScheme.surface.toArgb()
+    var webView by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webView?.apply {
+                stopLoading()
+                removeJavascriptInterface("StorePosCaptcha")
+                destroy()
+            }
+            webView = null
+        }
+    }
+
+    key(signUp, refreshKey) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f)
+        ) {
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(92.dp),
+                factory = {
+                    WebView(context).apply {
+                        webView = this
+                        setBackgroundColor(Color.TRANSPARENT)
+                        isVerticalScrollBarEnabled = false
+                        isHorizontalScrollBarEnabled = false
+
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.loadWithOverviewMode = true
+                        settings.useWideViewPort = true
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = true
+
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                        addJavascriptInterface(TurnstileBridge(onToken), "StorePosCaptcha")
+
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView, url: String) {
+                                super.onPageFinished(view, url)
+                                val script = """
+                                    (function () {
+                                      if (window.__storePosNativeCaptchaStarted) return;
+                                      window.__storePosNativeCaptchaStarted = true;
+
+                                      const style = document.createElement('style');
+                                      style.textContent = `
+                                        html, body, #app {
+                                          background: transparent !important;
+                                          min-height: 0 !important;
+                                          height: auto !important;
+                                          overflow: hidden !important;
+                                        }
+                                        .auth-wrap {
+                                          display: block !important;
+                                          min-height: 0 !important;
+                                          height: auto !important;
+                                          background: transparent !important;
+                                        }
+                                        .auth-art,
+                                        .auth-card > h2,
+                                        .auth-card > p,
+                                        .auth-card .segment,
+                                        #auth-form > .field,
+                                        #auth-form > button,
+                                        #auth-form > a,
+                                        #auth-form > .help {
+                                          display: none !important;
+                                        }
+                                        .auth-side {
+                                          display: block !important;
+                                          min-height: 0 !important;
+                                          height: auto !important;
+                                          padding: 0 !important;
+                                          background: transparent !important;
+                                        }
+                                        .auth-card {
+                                          width: 100% !important;
+                                          max-width: none !important;
+                                          margin: 0 !important;
+                                          padding: 8px 0 0 0 !important;
+                                          border: 0 !important;
+                                          box-shadow: none !important;
+                                          background: transparent !important;
+                                        }
+                                        #auth-form {
+                                          display: block !important;
+                                          margin: 0 !important;
+                                          padding: 0 !important;
+                                        }
+                                        .turnstile-wrap {
+                                          display: flex !important;
+                                          align-items: center !important;
+                                          justify-content: center !important;
+                                          min-height: 70px !important;
+                                          margin: 0 !important;
+                                          padding: 0 !important;
+                                          border: 0 !important;
+                                          background: transparent !important;
+                                        }
+                                        .turnstile-wrap > .help {
+                                          display: none !important;
+                                        }
+                                      `;
+                                      document.head.appendChild(style);
+
+                                      let lastToken = '';
+                                      const timer = setInterval(function () {
+                                        const field = document.querySelector('input[name="cf-turnstile-response"]');
+                                        const token = field && field.value ? field.value : '';
+                                        if (token && token !== lastToken) {
+                                          lastToken = token;
+                                          if (window.StorePosCaptcha && window.StorePosCaptcha.onToken) {
+                                            window.StorePosCaptcha.onToken(token);
+                                          }
+                                        }
+                                      }, 250);
+
+                                      window.addEventListener('beforeunload', function () {
+                                        clearInterval(timer);
+                                      }, { once: true });
+                                    })();
+                                """.trimIndent()
+                                view.evaluateJavascript(script, null)
+                            }
+                        }
+
+                        loadUrl(if (signUp) STOREPOS_SIGNUP_URL else STOREPOS_LOGIN_URL)
+                    }
+                },
+                update = { view ->
+                    view.isEnabled = enabled
+                    view.alpha = if (enabled) 1f else 0.72f
+                    view.setBackgroundColor(surfaceColor and 0x00FFFFFF)
+                }
+            )
+        }
+    }
+}
 
 @Composable
 fun AuthScreen(
     busy: Boolean,
     error: String?,
     notice: String?,
-    onSubmit: (displayName: String, email: String, password: String, signUp: Boolean) -> Unit
+    onSubmit: (
+        displayName: String,
+        email: String,
+        password: String,
+        signUp: Boolean,
+        captchaToken: String
+    ) -> Unit
 ) {
     var signUp by remember { mutableStateOf(false) }
     var displayName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var signUpCooldown by remember { mutableIntStateOf(0) }
+    var captchaToken by remember { mutableStateOf<String?>(null) }
+    var challengeRefreshKey by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(signUpCooldown) {
         if (signUpCooldown > 0) {
             delay(1000)
             signUpCooldown -= 1
+        }
+    }
+
+    LaunchedEffect(error, notice) {
+        if (!error.isNullOrBlank() || !notice.isNullOrBlank()) {
+            captchaToken = null
+            challengeRefreshKey += 1
         }
     }
 
@@ -113,6 +305,31 @@ fun AuthScreen(
                     )
                 }
 
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "Security verification",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    TurnstileChallenge(
+                        signUp = signUp,
+                        refreshKey = challengeRefreshKey,
+                        enabled = !busy,
+                        onToken = { token -> captchaToken = token }
+                    )
+                    Text(
+                        if (captchaToken.isNullOrBlank())
+                            "Complete the Cloudflare check before continuing."
+                        else
+                            "Security check complete.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (captchaToken.isNullOrBlank())
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.primary
+                    )
+                }
+
                 if (!notice.isNullOrBlank()) {
                     Text(
                         notice,
@@ -127,10 +344,13 @@ fun AuthScreen(
 
                 Button(
                     onClick = {
+                        val token = captchaToken ?: return@Button
                         if (signUp) signUpCooldown = 60
-                        onSubmit(displayName, email, password, signUp)
+                        captchaToken = null
+                        challengeRefreshKey += 1
+                        onSubmit(displayName, email, password, signUp, token)
                     },
-                    enabled = !busy && email.isNotBlank() &&
+                    enabled = !busy && !captchaToken.isNullOrBlank() && email.isNotBlank() &&
                         password.length >= (if (signUp) 8 else 6) &&
                         (!signUp || (displayName.isNotBlank() && signUpCooldown == 0)),
                     modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -156,6 +376,8 @@ fun AuthScreen(
                     onClick = {
                         signUp = !signUp
                         password = ""
+                        captchaToken = null
+                        challengeRefreshKey += 1
                     },
                     enabled = !busy,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
