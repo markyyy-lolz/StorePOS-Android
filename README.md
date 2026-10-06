@@ -64,3 +64,10 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Uses a dedicated Turnstile WebView instead of polling a hidden token from the StorePOS website.
 - Correctly clears expired/failed CAPTCHA tokens.
 - Removes unrelated website/footer content from the Android security-verification area.
+
+
+## v1.3.4
+- Fixes the blank Android Turnstile area by loading a hosted StorePOS Cloud verification page.
+- Uses the real StorePOS HTTPS origin for Cloudflare Turnstile.
+- Successful verification returns the token directly to Android and enables sign-in.
+- Keeps Supabase CAPTCHA protection enabled.
