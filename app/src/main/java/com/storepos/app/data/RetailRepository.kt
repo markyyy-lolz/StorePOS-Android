@@ -82,6 +82,71 @@ object RetailRepository {
         ).decodeAs()
     }
 
+    suspend fun holdPayMongoStock(
+        shopId: String,
+        clientKey: String,
+        cart: List<CartLine>,
+        holdSeconds: Int = 900
+    ): JsonObject {
+        require(cart.isNotEmpty()) { "Cart is empty." }
+        return client.postgrest.rpc(
+            function = "storepos_paymongo_hold_stock",
+            parameters = buildJsonObject {
+                put("p_shop_id", shopId)
+                put("p_client_key", clientKey)
+                put("p_items", cartItems(cart))
+                put("p_hold_seconds", holdSeconds.coerceIn(300, 3600))
+            }
+        ).decodeAs()
+    }
+
+    suspend fun releasePayMongoStock(
+        shopId: String,
+        clientKey: String
+    ): JsonObject =
+        client.postgrest.rpc(
+            function = "storepos_paymongo_release_stock",
+            parameters = buildJsonObject {
+                put("p_shop_id", shopId)
+                put("p_client_key", clientKey)
+            }
+        ).decodeAs()
+
+    suspend fun finalizePayMongoCheckout(
+        shopId: String,
+        cart: List<CartLine>,
+        customerId: String?,
+        discount: Double,
+        payments: List<CheckoutPayment>,
+        managerPin: String? = null,
+        charges: List<RetailCharge> = emptyList(),
+        dueDate: String? = null,
+        orderId: String? = null,
+        exchangeSaleId: String? = null,
+        clientKey: String
+    ): RetailCheckoutResult {
+        require(cart.isNotEmpty()) { "Cart is empty." }
+        require(payments.isNotEmpty()) { "At least one payment is required." }
+        return client.postgrest.rpc(
+            function = "storepos_paymongo_finalize_checkout",
+            parameters = buildJsonObject {
+                put("p_shop_id", shopId)
+                put("p_data", buildJsonObject {
+                    put("client_key", clientKey)
+                    put("items", cartItems(cart))
+                    put("discount", discount)
+                    put("charges", chargeItems(charges))
+                    put("payments", paymentItems(payments))
+                    customerId?.let { put("customer_id", it) }
+                    managerPin?.trim()?.takeIf { it.isNotBlank() }?.let { put("manager_pin", it) }
+                    dueDate?.trim()?.takeIf { it.isNotBlank() }?.let { put("due_date", it) }
+                    orderId?.let { put("order_id", it) }
+                    exchangeSaleId?.let { put("exchange_sale_id", it) }
+                })
+            }
+        ).decodeAs()
+    }
+
     suspend fun checkout(
         shopId: String,
         cart: List<CartLine>,
