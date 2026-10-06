@@ -26,20 +26,24 @@ object StoreRepository {
     fun currentUserEmail(): String? =
         client.auth.currentSessionOrNull()?.user?.email
 
-    suspend fun signIn(email: String, password: String) {
+    suspend fun signIn(email: String, password: String, captchaToken: String) {
+        require(captchaToken.isNotBlank()) { "Security verification required. Please complete the verification and try again." }
         client.auth.signInWith(Email) {
             this.email = email.trim()
             this.password = password
+            this.captchaToken = captchaToken
         }
     }
 
-    suspend fun signUp(displayName: String, email: String, password: String) {
+    suspend fun signUp(displayName: String, email: String, password: String, captchaToken: String) {
+        require(captchaToken.isNotBlank()) { "Security verification required. Please complete the verification and try again." }
         client.auth.signUpWith(
             Email,
-            redirectUrl = "https://markyyy-lolz.github.io/StorePOS-Web/#/confirm-email"
+            redirectUrl = "https://storepos.2023107337.workers.dev/#/confirm-email"
         ) {
             this.email = email.trim()
             this.password = password
+            this.captchaToken = captchaToken
             data = buildJsonObject {
                 put("display_name", displayName.trim().ifBlank { "Owner" })
             }
@@ -65,6 +69,8 @@ object StoreRepository {
                 if (seconds != null) "Please wait $seconds seconds before trying again."
                 else "Please wait about a minute before trying again."
             }
+            "captcha_failed" in lower || "captcha failed" in lower || "captcha" in lower || "turnstile" in lower ->
+                "Security verification failed or expired. Please complete the Cloudflare verification again."
             "invalid login credentials" in lower || "invalid_credentials" in lower ->
                 "Incorrect email or password."
             "email not confirmed" in lower ->
