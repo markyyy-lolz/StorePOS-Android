@@ -71,3 +71,10 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Uses the real StorePOS HTTPS origin for Cloudflare Turnstile.
 - Successful verification returns the token directly to Android and enables sign-in.
 - Keeps Supabase CAPTCHA protection enabled.
+
+
+## v1.3.5
+- Fixes the final Turnstile token handoff where Cloudflare could show Success but Sign in stayed disabled.
+- Uses a StorePOS callback URL intercepted directly by Android WebView.
+- Enables Sign in immediately after Android receives a valid CAPTCHA token.
+- Keeps Supabase CAPTCHA protection enabled.
