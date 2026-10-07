@@ -17,6 +17,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -119,22 +124,25 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
     val offlineStore = remember { OfflineStore(androidContext) }
 
-    val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val code = result.contents?.trim().orEmpty()
-        if (code.isNotBlank()) {
-            val product = products.firstOrNull {
-                it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
-            }
-            if (product != null) {
-                if (product.isWeighed) quantityProduct = product
-                else cart = addLine(cart, product)
-                query = ""
-                error = null
-            } else {
-                query = code
-                error = "Barcode not found in inventory: " + code
-            }
+    fun submitScannedCode(rawCode: String) {
+        val code = rawCode.trim()
+        if (code.isBlank()) return
+        val product = products.firstOrNull {
+            it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
         }
+        if (product != null) {
+            if (product.isWeighed) quantityProduct = product
+            else cart = addLine(cart, product)
+            query = ""
+            error = null
+        } else {
+            query = code
+            error = "Barcode / SKU not found in inventory: " + code
+        }
+    }
+
+    val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        submitScannedCode(result.contents.orEmpty())
     }
 
     fun scanBarcode() {
@@ -568,6 +576,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             if (it.isWeighed) quantityProduct = it
                             else cart = addLine(cart, it)
                         },
+                        { submitScannedCode(it) },
                         { scanBarcode() },
                         Modifier.weight(1.3f)
                     )
@@ -592,6 +601,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             if (it.isWeighed) quantityProduct = it
                             else cart = addLine(cart, it)
                         },
+                        { submitScannedCode(it) },
                         { scanBarcode() },
                         Modifier.weight(1f)
                     )
@@ -1455,14 +1465,42 @@ private fun ProductList(
     query: String,
     onQuery: (String) -> Unit,
     onAdd: (Product) -> Unit,
+    onSubmit: (String) -> Unit,
     onScan: () -> Unit,
     modifier: Modifier
 ) {
+    LaunchedEffect(query, products) {
+        val candidate = query.trim()
+        if (candidate.length >= 6) {
+            delay(160)
+            val exactMatch = products.any {
+                it.barcode.equals(candidate, ignoreCase = true) ||
+                    it.sku.equals(candidate, ignoreCase = true)
+            }
+            if (exactMatch) onSubmit(candidate)
+        }
+    }
+
     Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {
         OutlinedTextField(
-            query,
-            onQuery,
-            modifier = Modifier.fillMaxWidth(),
+            value = query,
+            onValueChange = { rawValue ->
+                val hasScannerTerminator = rawValue.any { it == '\n' || it == '\r' }
+                val cleaned = rawValue.replace("\n", "").replace("\r", "")
+                onQuery(cleaned)
+                if (hasScannerTerminator && cleaned.isNotBlank()) onSubmit(cleaned)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Enter) {
+                        val code = query.trim()
+                        if (code.isNotBlank()) onSubmit(code)
+                        true
+                    } else {
+                        false
+                    }
+                },
             singleLine = true,
             placeholder = { Text("Search name, SKU, barcode or brand") },
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
