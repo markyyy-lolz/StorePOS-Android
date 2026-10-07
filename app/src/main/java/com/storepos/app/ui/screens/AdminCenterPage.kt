@@ -1,5 +1,7 @@
 package com.storepos.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.storepos.app.BuildConfig
@@ -21,8 +24,12 @@ import com.storepos.app.ui.components.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import java.text.DateFormat
+import java.time.Instant
+import java.time.LocalDate
 import java.util.Date
 
 @Composable
@@ -125,6 +132,12 @@ fun AdminCenterPage(context: ShopContext) {
                 text = { Text("Diagnostics") },
                 icon = { Icon(Icons.Rounded.HealthAndSafety, null) }
             )
+            Tab(
+                selected = tab == 3,
+                onClick = { tab = 3 },
+                text = { Text("Backup") },
+                icon = { Icon(Icons.Rounded.SaveAlt, null) }
+            )
         }
 
         when (tab) {
@@ -166,12 +179,13 @@ fun AdminCenterPage(context: ShopContext) {
                 query = auditQuery,
                 onQuery = { auditQuery = it }
             )
-            else -> DiagnosticsTab(
+            2 -> DiagnosticsTab(
                 pendingCount = pending.size,
                 alerts = alerts,
                 health = health,
                 latestVersion = latestVersion
             )
+            else -> BackupExportTab(context)
         }
     }
 }
@@ -351,6 +365,250 @@ private fun AuditTrailTab(
             }
         }
     }
+}
+
+@Composable
+private fun BackupExportTab(context: ShopContext) {
+    val androidContext = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var exportContent by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun writeExport(uri: android.net.Uri?) {
+        if (uri == null) {
+            exportContent = null
+            return
+        }
+        val content = exportContent ?: return
+        runCatching {
+            androidContext.contentResolver.openOutputStream(uri)?.use {
+                it.write(content.toByteArray(Charsets.UTF_8))
+            } ?: error("Unable to open the selected file.")
+        }.onSuccess {
+            message = "Export saved successfully."
+        }.onFailure {
+            message = StoreRepository.userMessage(it)
+        }
+        exportContent = null
+    }
+
+    val csvLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri -> writeExport(uri) }
+
+    val jsonLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> writeExport(uri) }
+
+    fun exportProducts() {
+        scope.launch {
+            busy = true
+            message = null
+            runCatching {
+                val rows = StoreRepository.products(context.shop.id)
+                buildString {
+                    appendLine("sku,barcode,name,brand,cost_price,selling_price,stock,unit,reorder_level,shelf_location")
+                    rows.forEach { p ->
+                        appendLine(
+                            listOf(
+                                p.sku,
+                                p.barcode.orEmpty(),
+                                p.name,
+                                p.brand.orEmpty(),
+                                p.costPrice.toString(),
+                                p.sellingPrice.toString(),
+                                p.stockQuantity.toString(),
+                                p.unit,
+                                p.reorderLevel.toString(),
+                                p.shelfLocation.orEmpty()
+                            ).joinToString(",") { csvCell(it) }
+                        )
+                    }
+                }
+            }.onSuccess {
+                exportContent = it
+                csvLauncher.launch("StorePOS-products-" + LocalDate.now() + ".csv")
+            }.onFailure { message = StoreRepository.userMessage(it) }
+            busy = false
+        }
+    }
+
+    fun exportCustomers() {
+        scope.launch {
+            busy = true
+            message = null
+            runCatching {
+                val rows = StoreRepository.customers(context.shop.id)
+                buildString {
+                    appendLine("name,phone,email,address,loyalty_points,credit_limit,store_credit_balance")
+                    rows.forEach { row ->
+                        appendLine(
+                            listOf(
+                                row.name,
+                                row.phone.orEmpty(),
+                                row.email.orEmpty(),
+                                row.address.orEmpty(),
+                                row.loyaltyPoints.toString(),
+                                row.creditLimit.toString(),
+                                row.storeCreditBalance.toString()
+                            ).joinToString(",") { csvCell(it) }
+                        )
+                    }
+                }
+            }.onSuccess {
+                exportContent = it
+                csvLauncher.launch("StorePOS-customers-" + LocalDate.now() + ".csv")
+            }.onFailure { message = StoreRepository.userMessage(it) }
+            busy = false
+        }
+    }
+
+    fun exportSales() {
+        scope.launch {
+            busy = true
+            message = null
+            runCatching {
+                val rows = StoreRepository.sales(context.shop.id)
+                buildString {
+                    appendLine("sale_number,status,subtotal,discount,tax,total,amount_tendered,change_due,created_at")
+                    rows.forEach { row ->
+                        appendLine(
+                            listOf(
+                                row.saleNumber,
+                                row.status,
+                                row.subtotal.toString(),
+                                row.discountAmount.toString(),
+                                row.taxAmount.toString(),
+                                row.totalAmount.toString(),
+                                row.amountTendered?.toString().orEmpty(),
+                                row.changeDue?.toString().orEmpty(),
+                                row.createdAt.orEmpty()
+                            ).joinToString(",") { csvCell(it) }
+                        )
+                    }
+                }
+            }.onSuccess {
+                exportContent = it
+                csvLauncher.launch("StorePOS-sales-" + LocalDate.now() + ".csv")
+            }.onFailure { message = StoreRepository.userMessage(it) }
+            busy = false
+        }
+    }
+
+    fun exportFullBackup() {
+        scope.launch {
+            busy = true
+            message = null
+            runCatching {
+                coroutineScope {
+                    val products = async { StoreRepository.products(context.shop.id) }
+                    val customers = async { StoreRepository.customers(context.shop.id) }
+                    val suppliers = async { StoreRepository.suppliers(context.shop.id) }
+                    val sales = async { StoreRepository.sales(context.shop.id) }
+                    val expenses = async { StoreRepository.expenses(context.shop.id) }
+                    val backup = StoreBackup(
+                        exportedAt = Instant.now().toString(),
+                        shop = context.shop,
+                        products = products.await(),
+                        customers = customers.await(),
+                        suppliers = suppliers.await(),
+                        sales = sales.await(),
+                        expenses = expenses.await()
+                    )
+                    Json {
+                        prettyPrint = true
+                        encodeDefaults = true
+                    }.encodeToString(backup)
+                }
+            }.onSuccess {
+                exportContent = it
+                jsonLauncher.launch("StorePOS-backup-" + LocalDate.now() + ".json")
+            }.onFailure { message = StoreRepository.userMessage(it) }
+            busy = false
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Backup, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text("Local Backup & Export", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Save StorePOS data directly to this Android device without opening the web dashboard.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Text("CSV exports", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { exportProducts() }, enabled = !busy) {
+                        Icon(Icons.Rounded.Inventory2, null)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Products")
+                    }
+                    OutlinedButton(onClick = { exportCustomers() }, enabled = !busy) {
+                        Icon(Icons.Rounded.Groups, null)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Customers")
+                    }
+                    OutlinedButton(onClick = { exportSales() }, enabled = !busy) {
+                        Icon(Icons.Rounded.ReceiptLong, null)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Sales")
+                    }
+                }
+            }
+        }
+
+        item {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Text("Full JSON shop backup", fontWeight = FontWeight.Bold)
+                Text(
+                    "Includes shop profile, products, customers, suppliers, sales and expenses. Keep the file private because it contains business data.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = { exportFullBackup() }, enabled = !busy) {
+                    Icon(Icons.Rounded.SaveAlt, null)
+                    Spacer(Modifier.width(5.dp))
+                    Text(if (busy) "Preparing…" else "Save full backup")
+                }
+                message?.let {
+                    Text(
+                        it,
+                        color = if (it.startsWith("Export saved")) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        item {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Text("Restore safety", fontWeight = FontWeight.Bold)
+                Text(
+                    "Backups are export-only on Android. Restore remains in StorePOS Cloud so imports can be validated before replacing production records.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun csvCell(value: String): String {
+    val safe = value.replace(""", """")
+    return """ + safe + """
 }
 
 @Composable
