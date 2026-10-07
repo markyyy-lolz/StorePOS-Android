@@ -63,6 +63,12 @@ class CustomerDisplayController(private val context: Context) {
         val metrics = displayContext.resources.displayMetrics
         val widthDp = metrics.widthPixels / metrics.density
         val wide = widthDp >= 720f
+        val prefs = context.getSharedPreferences("motopos_settings", 0)
+        val showBrand = prefs.getBoolean("customer_display_show_brand", true)
+        val idleMessage = prefs.getString(
+            "customer_display_idle_message",
+            "Ready for your order"
+        )?.trim().orEmpty().ifBlank { "Ready for your order" }
         val itemCount = cart.sumOf { it.quantity }
         val total = cart.sumOf { it.lineTotal }
 
@@ -85,13 +91,15 @@ class CustomerDisplayController(private val context: Context) {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val brand = text(displayContext, "STOREPOS", 13f, true).apply {
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
-            background = rounded(Color.rgb(20, 118, 255), 999f)
+        if (showBrand) {
+            val brand = text(displayContext, "STOREPOS", 13f, true).apply {
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
+                background = rounded(Color.rgb(20, 118, 255), 999f)
+            }
+            header.addView(brand)
         }
-        header.addView(brand)
 
         val titleWrap = LinearLayout(displayContext).apply {
             orientation = LinearLayout.VERTICAL
@@ -125,7 +133,7 @@ class CustomerDisplayController(private val context: Context) {
             gravity = Gravity.TOP
         }
 
-        val orderCard = buildOrderCard(displayContext, cart, itemCount, wide)
+        val orderCard = buildOrderCard(displayContext, cart, itemCount, wide, idleMessage)
         val summaryCard = buildSummaryCard(displayContext, cart.isEmpty(), itemCount, total, wide)
 
         if (wide) {
@@ -182,7 +190,8 @@ class CustomerDisplayController(private val context: Context) {
         context: Context,
         cart: List<CartLine>,
         itemCount: Double,
-        wide: Boolean
+        wide: Boolean,
+        idleMessage: String
     ): View {
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -224,7 +233,7 @@ class CustomerDisplayController(private val context: Context) {
             }, matchWidth())
 
             empty.addView(space(context, 10))
-            empty.addView(text(context, "Ready for your order", if (wide) 30f else 24f, true).apply {
+            empty.addView(text(context, idleMessage, if (wide) 30f else 24f, true).apply {
                 gravity = Gravity.CENTER
                 setTextColor(Color.rgb(20, 35, 57))
             }, matchWidth())
