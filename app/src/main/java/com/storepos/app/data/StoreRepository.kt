@@ -233,6 +233,7 @@ object StoreRepository {
     suspend fun updateProduct(product: Product) {
         client.from("products").update({
             set("name", product.name)
+            set("category_id", product.categoryId)
             set("brand", product.brand)
             set("barcode", product.barcode)
             set("part_number", product.partNumber)
@@ -296,7 +297,22 @@ object StoreRepository {
     suspend fun categories(shopId: String): List<ProductCategory> =
         client.from("product_categories").select {
             filter { eq("shop_id", shopId) }
-        }.decodeList()
+        }.decodeList<ProductCategory>()
+            .sortedWith(compareBy<ProductCategory> { it.sortOrder }.thenBy { it.name.lowercase() })
+
+    suspend fun addCategory(input: ProductCategoryInsert): ProductCategory =
+        client.from("product_categories").insert(input) { select() }.decodeSingle()
+
+    suspend fun updateCategory(category: ProductCategory) {
+        client.from("product_categories").update({
+            set("name", category.name.trim())
+            set("description", category.description?.trim()?.ifBlank { null })
+            set("sort_order", category.sortOrder)
+            set("is_active", category.isActive)
+        }) {
+            filter { eq("id", category.id) }
+        }
+    }
 
     suspend fun customers(shopId: String): List<Customer> =
         client.from("customers").select {
