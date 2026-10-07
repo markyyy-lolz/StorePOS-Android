@@ -36,6 +36,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import com.storepos.app.printing.BluetoothReceiptPrinter
@@ -121,6 +122,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var paymongoRetryNonce by remember { mutableIntStateOf(0) }
 
     var offlineMode by remember { mutableStateOf(false) }
+    var customerDisplayEnabled by remember { mutableStateOf(false) }
     var offlineQueued by remember { mutableStateOf<Double?>(null) }
     var pendingCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
@@ -132,10 +134,26 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         prefs.getBoolean("training_mode_" + context.shop.id, false)
     }
     val offlineStore = remember { OfflineStore(androidContext) }
+    val customerDisplay = remember { CustomerDisplayController(androidContext) }
     val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
     val vibrator = remember { androidContext.getSystemService(Vibrator::class.java) }
     DisposableEffect(Unit) {
-        onDispose { scanTone.release() }
+        onDispose {
+            scanTone.release()
+            customerDisplay.dismiss()
+        }
+    }
+
+    LaunchedEffect(customerDisplayEnabled, cart, context.shop.name) {
+        if (customerDisplayEnabled) {
+            val shown = customerDisplay.show(context.shop.name, cart)
+            if (!shown) {
+                customerDisplayEnabled = false
+                error = "No external customer display detected. Connect an HDMI / presentation display and try again."
+            }
+        } else {
+            customerDisplay.dismiss()
+        }
     }
 
     fun scanSuccessFeedback() {
@@ -501,6 +519,24 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             },
             action = {
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = {
+                            if (customerDisplayEnabled) {
+                                customerDisplayEnabled = false
+                            } else if (customerDisplay.hasExternalDisplay()) {
+                                customerDisplayEnabled = true
+                            } else {
+                                error = "No external customer display detected. Connect an HDMI / presentation display and try again."
+                            }
+                        }
+                    ) {
+                        Icon(
+                            if (customerDisplayEnabled) Icons.Rounded.DesktopWindows else Icons.Rounded.ScreenshotMonitor,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (customerDisplayEnabled) "Display on" else "Customer display")
+                    }
                     if (offlineMode) {
                         AssistChip(onClick = {}, label = { Text("OFFLINE") })
                     } else {
