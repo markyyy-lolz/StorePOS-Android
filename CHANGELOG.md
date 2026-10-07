@@ -1,3 +1,10 @@
+# Changelog
+
+## v1.4.1
+- Fixed Supabase insert operations decoding empty `return=minimal` responses.
+- Added explicit `select()` return representation for inserts that immediately decode the created row.
+- Fixes the Inventory message: `StorePOS received an incomplete cloud response. Please retry once.` after a successful product insert.
+
 # StorePOS v1.0.1
 
 - Fixed the update checker offering MotoPOS releases from the shared database.

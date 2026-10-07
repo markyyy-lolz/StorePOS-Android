@@ -207,7 +207,7 @@ object StoreRepository {
     suspend fun addProduct(input: ProductInsert): Product {
         val openingStock = input.stockQuantity
         val product = client.from("products")
-            .insert(input.copy(stockQuantity = 0.0))
+            .insert(input.copy(stockQuantity = 0.0)) { select() }
             .decodeSingle<Product>()
         return if (openingStock > 0.0) {
             adjustInventoryStock(product.id, openingStock, "opening", "Opening stock")
@@ -304,7 +304,7 @@ object StoreRepository {
         }.decodeList<Customer>().sortedBy { it.name.lowercase() }
 
     suspend fun addCustomer(input: CustomerInsert): Customer =
-        client.from("customers").insert(input).decodeSingle()
+        client.from("customers").insert(input) { select() }.decodeSingle()
 
     suspend fun motorcycles(shopId: String): List<Motorcycle> =
         client.from("motorcycles").select {
@@ -317,7 +317,7 @@ object StoreRepository {
         }.decodeList()
 
     suspend fun addMotorcycle(input: MotorcycleInsert): Motorcycle =
-        client.from("motorcycles").insert(input).decodeSingle()
+        client.from("motorcycles").insert(input) { select() }.decodeSingle()
 
     suspend fun services(shopId: String): List<ServiceItem> =
         client.from("service_catalog").select {
@@ -330,7 +330,7 @@ object StoreRepository {
         }.decodeList<JobOrder>().sortedByDescending { it.createdAt ?: "" }
 
     suspend fun addJob(input: JobOrderInsert): JobOrder =
-        client.from("job_orders").insert(input).decodeSingle()
+        client.from("job_orders").insert(input) { select() }.decodeSingle()
 
     suspend fun updateJobStatus(id: String, status: String) {
         client.from("job_orders").update({
@@ -346,7 +346,7 @@ object StoreRepository {
         }.decodeList<Supplier>().sortedBy { it.name.lowercase() }
 
     suspend fun addSupplier(input: SupplierInsert): Supplier =
-        client.from("suppliers").insert(input).decodeSingle()
+        client.from("suppliers").insert(input) { select() }.decodeSingle()
 
     suspend fun purchaseOrders(shopId: String): List<PurchaseOrder> =
         client.from("purchase_orders").select {
@@ -364,7 +364,7 @@ object StoreRepository {
         }.decodeList<Expense>().sortedByDescending { it.expenseDate }
 
     suspend fun addExpense(input: ExpenseInsert): Expense =
-        client.from("expenses").insert(input).decodeSingle()
+        client.from("expenses").insert(input) { select() }.decodeSingle()
 
     suspend fun supportThreads(shopId: String): List<SupportThread> =
         client.from("support_threads").select {
@@ -464,7 +464,7 @@ object StoreRepository {
                 taxAmount = tax,
                 items = cart.map { HeldSaleItem(it.product.id, it.quantity, it.unitPriceOverride) }
             )
-        ).decodeSingle()
+        ) { select() }.decodeSingle()
     }
 
     suspend fun deleteHeldSale(id: String) {
@@ -630,7 +630,7 @@ object StoreRepository {
         }.decodeList<Appointment>().sortedBy { it.scheduledAt }
 
     suspend fun addAppointment(input: AppointmentInsert): Appointment =
-        client.from("appointments").insert(input).decodeSingle()
+        client.from("appointments").insert(input) { select() }.decodeSingle()
 
     suspend fun updateAppointmentStatus(id: String, status: String) {
         client.from("appointments").update({ set("status", status) }) {
@@ -647,7 +647,7 @@ object StoreRepository {
         )
 
     suspend fun addServiceReminder(input: ServiceReminderInsert): ServiceReminder =
-        client.from("service_reminders").insert(input).decodeSingle()
+        client.from("service_reminders").insert(input) { select() }.decodeSingle()
 
     suspend fun updateServiceReminderStatus(id: String, status: String) {
         client.from("service_reminders").update({
@@ -668,7 +668,7 @@ object StoreRepository {
         }.decodeList<WarrantyClaim>().sortedByDescending { it.createdAt ?: "" }
 
     suspend fun addWarrantyClaim(input: WarrantyClaimInsert): WarrantyClaim =
-        client.from("warranty_claims").insert(input).decodeSingle()
+        client.from("warranty_claims").insert(input) { select() }.decodeSingle()
 
     suspend fun technicianTimers(shopId: String): List<TechnicianTimeEntry> =
         client.from("technician_time_entries").select {
