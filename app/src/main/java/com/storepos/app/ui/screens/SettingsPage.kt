@@ -25,6 +25,7 @@ import com.storepos.app.data.model.ShopMember
 import com.storepos.app.data.model.ShopSettings
 import com.storepos.app.data.model.UserProfile
 import com.storepos.app.data.model.MemberPermissionOverride
+import com.storepos.app.notifications.StorePosAlertWorker
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.launch
 
@@ -37,6 +38,9 @@ fun SettingsPage(context: ShopContext) {
     val canTraining = context.member.role.lowercase() in setOf("owner", "admin", "manager")
     var trainingMode by remember(context.shop.id) {
         mutableStateOf(prefs.getBoolean("training_mode_" + context.shop.id, false))
+    }
+    var backgroundAlerts by remember {
+        mutableStateOf(prefs.getBoolean("background_alerts_enabled", true))
     }
     var devices by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
     var members by remember { mutableStateOf<List<ShopMember>>(emptyList()) }
@@ -101,6 +105,29 @@ fun SettingsPage(context: ShopContext) {
                     Text("Supabase Cloud", fontWeight = FontWeight.Bold)
                     Text("Connected • secure RLS • realtime-ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+        }
+
+        MotoCard(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Icon(Icons.Rounded.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Background Store Alerts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Check critical and warning alerts every 30 minutes when internet is available.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = backgroundAlerts,
+                    onCheckedChange = { enabled ->
+                        backgroundAlerts = enabled
+                        prefs.edit().putBoolean("background_alerts_enabled", enabled).apply()
+                        if (enabled) StorePosAlertWorker.schedule(androidContext)
+                        else StorePosAlertWorker.cancel(androidContext)
+                    }
+                )
             }
         }
 
