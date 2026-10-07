@@ -144,6 +144,15 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         }
     }
 
+    LaunchedEffect(Unit) {
+        if (
+            prefs.getBoolean("customer_display_auto", false) &&
+            customerDisplay.hasExternalDisplay()
+        ) {
+            customerDisplayEnabled = true
+        }
+    }
+
     LaunchedEffect(customerDisplayEnabled, cart, context.shop.name) {
         if (customerDisplayEnabled) {
             val shown = customerDisplay.show(context.shop.name, cart)
