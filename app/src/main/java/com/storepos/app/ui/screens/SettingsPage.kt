@@ -178,7 +178,9 @@ fun SettingsPage(context: ShopContext) {
                                         refreshAdminData()
                                     }.onFailure {
                                         error = StoreRepository.userMessage(it)
-                                    },
+                                    }
+                                }
+                            },
                             onPermissions = {
                                 permissionMember = member
                                 permissionLoading = true
@@ -192,8 +194,6 @@ fun SettingsPage(context: ShopContext) {
                                         error = StoreRepository.userMessage(it)
                                     }
                                     permissionLoading = false
-                                }
-                            }
                                 }
                             }
                         )
