@@ -1,0 +1,101 @@
+name: Apply StorePOS v1.4.1 Insert Response Fix
+
+on:
+  push:
+    branches:
+      - "fix/v1.4.1-insert-response"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fix/v1.4.1-insert-response
+          fetch-depth: 0
+
+      - name: Patch insert calls that decode a returned row
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/storepos/app/data/StoreRepository.kt")
+          text = path.read_text()
+
+          replacements = {
+              '.insert(input.copy(stockQuantity = 0.0))\n            .decodeSingle<Product>()':
+                  '.insert(input.copy(stockQuantity = 0.0)) { select() }\n            .decodeSingle<Product>()',
+              'client.from("customers").insert(input).decodeSingle()':
+                  'client.from("customers").insert(input) { select() }.decodeSingle()',
+              'client.from("motorcycles").insert(input).decodeSingle()':
+                  'client.from("motorcycles").insert(input) { select() }.decodeSingle()',
+              'client.from("job_orders").insert(input).decodeSingle()':
+                  'client.from("job_orders").insert(input) { select() }.decodeSingle()',
+              'client.from("suppliers").insert(input).decodeSingle()':
+                  'client.from("suppliers").insert(input) { select() }.decodeSingle()',
+              'client.from("expenses").insert(input).decodeSingle()':
+                  'client.from("expenses").insert(input) { select() }.decodeSingle()',
+              'client.from("appointments").insert(input).decodeSingle()':
+                  'client.from("appointments").insert(input) { select() }.decodeSingle()',
+              'client.from("service_reminders").insert(input).decodeSingle()':
+                  'client.from("service_reminders").insert(input) { select() }.decodeSingle()',
+              'client.from("warranty_claims").insert(input).decodeSingle()':
+                  'client.from("warranty_claims").insert(input) { select() }.decodeSingle()',
+              '        ).decodeSingle()\n    }\n\n    suspend fun deleteHeldSale':
+                  '        ) { select() }.decodeSingle()\n    }\n\n    suspend fun deleteHeldSale',
+          }
+
+          changed = 0
+          for old, new in replacements.items():
+              if old in text:
+                  text = text.replace(old, new)
+                  changed += 1
+
+          if changed != len(replacements):
+              missing = len(replacements) - changed
+              raise SystemExit(f"Patch safety check failed: {missing} expected insert patterns were not found")
+
+          path.write_text(text)
+
+          gradle = Path("app/build.gradle.kts")
+          g = gradle.read_text()
+          g = g.replace('versionCode = 14', 'versionCode = 15')
+          g = g.replace('versionName = "1.4.0"', 'versionName = "1.4.1"')
+          gradle.write_text(g)
+
+          release = Path("RELEASE_NOTES.md")
+          release.write_text("""# StorePOS v1.4.1 — Cloud Insert Response Hotfix
+
+- Fixed a false **incomplete cloud response** error after successfully creating products.
+- Product creation now explicitly requests the inserted row from Supabase before decoding it.
+- Applied the same response-mode fix to customer, motorcycle, job order, supplier, expense, appointment, service reminder, warranty claim, and held-sale inserts.
+- Prevents records from being saved successfully in the cloud while the Android UI incorrectly reports a failure.
+- Keeps opening-stock initialization working after a new product is created.
+
+This is a patch release for StorePOS Android v1.4.x.
+""")
+
+          changelog = Path("CHANGELOG.md")
+          old_changelog = changelog.read_text()
+          entry = """# Changelog\n\n## v1.4.1\n- Fixed Supabase insert operations decoding empty `return=minimal` responses.\n- Added explicit `select()` return representation for inserts that immediately decode the created row.\n- Fixes the Inventory message: `StorePOS received an incomplete cloud response. Please retry once.` after a successful product insert.\n\n"""
+          if old_changelog.startswith("# Changelog\n"):
+              old_changelog = old_changelog[len("# Changelog\n"):].lstrip("\n")
+          changelog.write_text(entry + old_changelog)
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/storepos/app/data/StoreRepository.kt app/build.gradle.kts RELEASE_NOTES.md CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "Patch already applied."
+            exit 0
+          fi
+          git commit -m "fix: request returned rows for Supabase inserts"
+          git push origin HEAD:fix/v1.4.1-insert-response
