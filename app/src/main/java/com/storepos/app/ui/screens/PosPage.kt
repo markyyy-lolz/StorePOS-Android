@@ -2,6 +2,10 @@ package com.storepos.app.ui.screens
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.VibrationEffect
+import android.os.Vibrator
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -32,6 +36,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import com.storepos.app.printing.BluetoothReceiptPrinter
@@ -97,11 +102,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var quantityProduct by remember { mutableStateOf<Product?>(null) }
     var priceProduct by remember { mutableStateOf<Product?>(null) }
     var cartEditorOpen by remember { mutableStateOf(false) }
+    var unknownBarcode by remember { mutableStateOf<String?>(null) }
     var holdOpen by remember { mutableStateOf(false) }
     var recallOpen by remember { mutableStateOf(false) }
     var startShiftOpen by remember { mutableStateOf(false) }
 
     var lastSale by remember { mutableStateOf<Sale?>(null) }
+    var lastSaleTraining by remember { mutableStateOf(false) }
     var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
     var lastReceiptToken by remember { mutableStateOf<String?>(null) }
@@ -115,6 +122,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var paymongoRetryNonce by remember { mutableIntStateOf(0) }
 
     var offlineMode by remember { mutableStateOf(false) }
+    var customerDisplayEnabled by remember { mutableStateOf(false) }
     var offlineQueued by remember { mutableStateOf<Double?>(null) }
     var pendingCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
@@ -122,7 +130,38 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
     val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
+    val trainingMode = remember(context.shop.id) {
+        prefs.getBoolean("training_mode_" + context.shop.id, false)
+    }
     val offlineStore = remember { OfflineStore(androidContext) }
+    val customerDisplay = remember { CustomerDisplayController(androidContext) }
+    val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
+    val vibrator = remember { androidContext.getSystemService(Vibrator::class.java) }
+    DisposableEffect(Unit) {
+        onDispose {
+            scanTone.release()
+            customerDisplay.dismiss()
+        }
+    }
+
+    LaunchedEffect(customerDisplayEnabled, cart, context.shop.name) {
+        if (customerDisplayEnabled) {
+            val shown = customerDisplay.show(context.shop.name, cart)
+            if (!shown) {
+                customerDisplayEnabled = false
+                error = "No external customer display detected. Connect an HDMI / presentation display and try again."
+            }
+        } else {
+            customerDisplay.dismiss()
+        }
+    }
+
+    fun scanSuccessFeedback() {
+        scanTone.startTone(ToneGenerator.TONE_PROP_BEEP, 70)
+        vibrator?.vibrate(
+            VibrationEffect.createOneShot(35, VibrationEffect.DEFAULT_AMPLITUDE)
+        )
+    }
 
     fun submitScannedCode(rawCode: String) {
         val code = rawCode.trim()
@@ -133,11 +172,14 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         if (product != null) {
             if (product.isWeighed) quantityProduct = product
             else cart = addLine(cart, product)
+            scanSuccessFeedback()
             query = ""
+            unknownBarcode = null
             error = null
         } else {
             query = code
-            error = "Barcode / SKU not found in inventory: " + code
+            unknownBarcode = code
+            error = "Barcode / SKU not found. Create it now or scan another item: " + code
         }
     }
 
@@ -217,6 +259,11 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     fun beginCheckout() {
         if (cart.isEmpty() || preparingCheckout) return
+        if (trainingMode) {
+            retailQuote = null
+            checkout = true
+            return
+        }
         val serialLine = cart.firstOrNull { line ->
             val base = line.product.retailParentId?.let { parentId -> products.firstOrNull { it.id == parentId } } ?: line.product
             if (!base.serialTracked) false
@@ -407,6 +454,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = pending.receiptCart
                         lastPayments = listOf(verifiedPayment)
                         lastSale = result.sale
+                        lastSaleTraining = false
                         receiptPrintedOnce = false
                         cart = emptyList()
                         pendingPayMongo = null
@@ -455,7 +503,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     val favoriteProducts = retailFavorites.mapNotNull { favorite -> products.firstOrNull { it.id == favorite.productId && it.isActive } }
     val openShift = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
     val cachedOpenShift = prefs.getString("open_shift_" + context.shop.id, null)
-    val registerOpen = !settings.requireCashierShift ||
+    val registerOpen = trainingMode ||
+        !settings.requireCashierShift ||
         openShift != null ||
         (offlineMode && !cachedOpenShift.isNullOrBlank())
     val cashierRole = context.member.role.lowercase() == "cashier"
@@ -463,12 +512,31 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeader(
             "Point of Sale",
-            if (offlineMode)
-                "Offline mode • cached catalog • queued transactions sync when online"
-            else
-                "Production register • scan, hold, split tender & receipt printing",
+            when {
+                trainingMode -> "TRAINING MODE • practice only • no real sale, stock or cloud posting"
+                offlineMode -> "Offline mode • cached catalog • queued transactions sync when online"
+                else -> "Production register • scan, hold, split tender & receipt printing"
+            },
             action = {
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = {
+                            if (customerDisplayEnabled) {
+                                customerDisplayEnabled = false
+                            } else if (customerDisplay.hasExternalDisplay()) {
+                                customerDisplayEnabled = true
+                            } else {
+                                error = "No external customer display detected. Connect an HDMI / presentation display and try again."
+                            }
+                        }
+                    ) {
+                        Icon(
+                            if (customerDisplayEnabled) Icons.Rounded.DesktopWindows else Icons.Rounded.ScreenshotMonitor,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (customerDisplayEnabled) "Display on" else "Customer display")
+                    }
                     if (offlineMode) {
                         AssistChip(onClick = {}, label = { Text("OFFLINE") })
                     } else {
@@ -503,6 +571,29 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         )
 
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        if (trainingMode) {
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.School, null)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("TRAINING MODE", fontWeight = FontWeight.Black)
+                        Text(
+                            "Checkout is simulated locally. Inventory, sales, cash drawer and reports will not change.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
 
         if (favoriteProducts.isNotEmpty()) {
             MotoCard(Modifier.fillMaxWidth()) {
@@ -587,7 +678,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         onHold = { if (cart.isNotEmpty()) holdOpen = true },
                         onCheckout = { beginCheckout() },
                         checkoutEnabled = cart.isNotEmpty() && registerOpen && !preparingCheckout,
-                        holdEnabled = settings.allowHoldSales && cart.isNotEmpty() && !offlineMode,
+                        holdEnabled = !trainingMode && settings.allowHoldSales && cart.isNotEmpty() && !offlineMode,
                         modifier = Modifier.weight(.9f)
                     )
                 }
@@ -618,7 +709,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             OutlinedButton(onClick = { cartEditorOpen = true }, enabled = cart.isNotEmpty()) {
                                 Text("Cart")
                             }
-                            if (settings.allowHoldSales && !offlineMode) {
+                            if (!trainingMode && settings.allowHoldSales && !offlineMode) {
                                 OutlinedButton(onClick = { holdOpen = true }, enabled = cart.isNotEmpty()) {
                                     Text("Hold")
                                 }
@@ -698,6 +789,38 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             onOverride = { product ->
                 cartEditorOpen = false
                 priceProduct = product
+            }
+        )
+    }
+
+    unknownBarcode?.let { code ->
+        QuickCreateScannedProductDialog(
+            code = code,
+            onDismiss = { unknownBarcode = null },
+            onSave = { name, cost, price, openingStock ->
+                scope.launch {
+                    error = null
+                    runCatching {
+                        StoreRepository.addProduct(
+                            ProductInsert(
+                                shopId = context.shop.id,
+                                sku = code,
+                                barcode = code,
+                                name = name,
+                                costPrice = cost,
+                                sellingPrice = price,
+                                stockQuantity = openingStock,
+                                reorderLevel = 5.0
+                            )
+                        )
+                    }.onSuccess { created ->
+                        products = (products + created).distinctBy { it.id }
+                        if (created.isWeighed) quantityProduct = created else cart = addLine(cart, created)
+                        scanSuccessFeedback()
+                        query = ""
+                        unknownBarcode = null
+                    }.onFailure { error = StoreRepository.userMessage(it) }
+                }
             }
         )
     }
@@ -786,14 +909,24 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     modifier = Modifier.size(48.dp)
                 )
             },
-            title = { Text("Transaction Complete", fontWeight = FontWeight.Black) },
+            title = {
+                Text(
+                    if (lastSaleTraining) "Training Transaction Complete" else "Transaction Complete",
+                    fontWeight = FontWeight.Black
+                )
+            },
             text = {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Payment, retail pricing, and inventory were committed successfully.")
+                    Text(
+                        if (lastSaleTraining)
+                            "Practice checkout complete. No sale, payment, stock movement or report entry was created."
+                        else
+                            "Payment, retail pricing, and inventory were committed successfully."
+                    )
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f),
@@ -842,51 +975,58 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 }
             },
             confirmButton = {
-                val printerAddress = prefs.getString("printer_address", null)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            val isReprint = receiptPrintedOnce
-                            printing = true
-                            printMessage = null
-                            scope.launch {
-                                val result = printSale(sale, lastReceiptCart, lastPayments, lastReceiptToken)
-                                printMessage = result
-                                if (result.startsWith("Receipt sent")) {
-                                    if (isReprint) {
-                                        runCatching {
-                                            RetailOpsRepository.recordReceiptReprint(
-                                                context.shop.id,
-                                                sale.id,
-                                                "Android POS completed-sale reprint"
-                                            )
-                                        }.onFailure {
-                                            printMessage = result + " Reprint audit could not sync: " + StoreRepository.userMessage(it)
-                                        }
-                                    }
-                                    receiptPrintedOnce = true
-                                }
-                                printing = false
-                            }
-                        },
-                        enabled = printerAddress != null && !printing,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Rounded.Print, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (printing) "Printing…" else "Print receipt")
+                val clearCompletedSale = {
+                    lastSale = null
+                    lastSaleTraining = false
+                    lastReceiptCart = emptyList()
+                    lastPayments = emptyList()
+                    lastReceiptToken = null
+                    receiptPrintedOnce = false
+                    printMessage = null
+                }
+                if (lastSaleTraining) {
+                    Button(onClick = clearCompletedSale, modifier = Modifier.fillMaxWidth()) {
+                        Text("Done")
                     }
-                    Button(
-                        onClick = {
-                            lastSale = null
-                            lastReceiptCart = emptyList()
-                            lastPayments = emptyList()
-                            lastReceiptToken = null
-                            receiptPrintedOnce = false
-                            printMessage = null
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Done") }
+                } else {
+                    val printerAddress = prefs.getString("printer_address", null)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val isReprint = receiptPrintedOnce
+                                printing = true
+                                printMessage = null
+                                scope.launch {
+                                    val result = printSale(sale, lastReceiptCart, lastPayments, lastReceiptToken)
+                                    printMessage = result
+                                    if (result.startsWith("Receipt sent")) {
+                                        if (isReprint) {
+                                            runCatching {
+                                                RetailOpsRepository.recordReceiptReprint(
+                                                    context.shop.id,
+                                                    sale.id,
+                                                    "Android POS completed-sale reprint"
+                                                )
+                                            }.onFailure {
+                                                printMessage = result + " Reprint audit could not sync: " + StoreRepository.userMessage(it)
+                                            }
+                                        }
+                                        receiptPrintedOnce = true
+                                    }
+                                    printing = false
+                                }
+                            },
+                            enabled = printerAddress != null && !printing,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Print, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (printing) "Printing…" else "Print receipt")
+                        }
+                        Button(onClick = clearCompletedSale, modifier = Modifier.weight(1f)) {
+                            Text("Done")
+                        }
+                    }
                 }
             },
             shape = RoundedCornerShape(28.dp)
@@ -1132,7 +1272,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             cashierRole = cashierRole,
             hasPriceOverride = cart.any { it.hasPriceOverride },
             offlineMode = offlineMode,
-            paymongoAvailable = !offlineMode && paymongoIntegration?.enabled == true &&
+            paymongoAvailable = !trainingMode && !offlineMode && paymongoIntegration?.enabled == true &&
                 entitlements.valid && entitlements.features.contains("paymongo_payments"),
             pricingSubtotal = if (offlineMode) null else retailQuote?.subtotal,
             pricingNote = if (!offlineMode && retailQuote != null) "StorePOS Retail pricing is active • wholesale and eligible promos are already applied." else null,
@@ -1148,6 +1288,38 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             } ?: line
                         }
                     } else soldCart
+
+                    if (trainingMode) {
+                        val subtotal = receiptCart.sumOf { it.lineTotal }
+                        val chargesTotal = charges.sumOf { it.amount }
+                        val total = (subtotal - discount + tax + chargesTotal).coerceAtLeast(0.0)
+                        val tendered = payments.sumOf { it.tendered ?: it.amount }
+                        val trainingSale = Sale(
+                            id = "training-" + UUID.randomUUID().toString(),
+                            shopId = context.shop.id,
+                            saleNumber = "TRAINING-" + System.currentTimeMillis().toString().takeLast(8),
+                            customerId = customerId,
+                            cashierId = context.userId,
+                            subtotal = subtotal,
+                            discountAmount = discount,
+                            taxAmount = tax,
+                            totalAmount = total,
+                            amountTendered = tendered,
+                            changeDue = (tendered - total).coerceAtLeast(0.0),
+                            status = "completed",
+                            createdAt = Instant.now().toString()
+                        )
+                        lastReceiptToken = null
+                        lastReceiptCart = receiptCart
+                        lastPayments = payments
+                        lastSale = trainingSale
+                        lastSaleTraining = true
+                        receiptPrintedOnce = false
+                        printMessage = "Training transaction only • nothing was saved to StorePOS Cloud."
+                        cart = emptyList()
+                        checkout = false
+                        return@launch
+                    }
 
                     val paymongoPayment = payments.singleOrNull()?.takeIf { it.method == "paymongo" }
                     if (paymongoPayment != null) {
@@ -1251,6 +1423,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = sale
+                        lastSaleTraining = false
                         receiptPrintedOnce = false
                         cart = emptyList()
                         checkout = false
@@ -1700,6 +1873,77 @@ private fun CartEditorDialog(
             }
         },
         confirmButton = { Button(onClick = onDismiss) { Text("Done") } }
+    )
+}
+
+@Composable
+private fun QuickCreateScannedProductDialog(
+    code: String,
+    onDismiss: () -> Unit,
+    onSave: (String, Double, Double, Double) -> Unit
+) {
+    var name by remember(code) { mutableStateOf("") }
+    var cost by remember(code) { mutableStateOf("") }
+    var price by remember(code) { mutableStateOf("") }
+    var stock by remember(code) { mutableStateOf("1") }
+    val parsedCost = cost.toDoubleOrNull() ?: 0.0
+    val parsedPrice = price.toDoubleOrNull()
+    val parsedStock = stock.toDoubleOrNull()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unknown barcode", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Barcode / SKU: $code")
+                Text(
+                    "Create this product without leaving the register. It will be added to the cart after saving.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Product name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = cost,
+                        onValueChange = { cost = it },
+                        label = { Text("Cost") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = price,
+                        onValueChange = { price = it },
+                        label = { Text("Selling") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+                OutlinedTextField(
+                    value = stock,
+                    onValueChange = { stock = it },
+                    label = { Text("Opening stock") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(name.trim(), parsedCost, parsedPrice ?: 0.0, parsedStock ?: 0.0) },
+                enabled = name.isNotBlank() && parsedPrice != null && parsedPrice >= 0.0 &&
+                    parsedStock != null && parsedStock >= 0.0
+            ) { Text("Create & add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 

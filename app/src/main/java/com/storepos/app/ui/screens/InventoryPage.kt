@@ -13,6 +13,9 @@ import androidx.compose.material.icons.rounded.SyncAlt
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.FactCheck
 import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.Product
 import com.storepos.app.data.model.ProductInsert
+import com.storepos.app.data.model.ProductCategory
+import com.storepos.app.data.model.ProductCategoryInsert
 import com.storepos.app.data.model.ShopContext
 import com.storepos.app.data.model.InventoryCount
 import com.storepos.app.data.model.InventoryCountItem
@@ -34,9 +39,11 @@ import com.journeyapps.barcodescanner.ScanOptions
 @Composable
 fun InventoryPage(context: ShopContext) {
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var categories by remember { mutableStateOf<List<ProductCategory>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var addOpen by remember { mutableStateOf(false) }
+    var categoryManagerOpen by remember { mutableStateOf(false) }
     var editProduct by remember { mutableStateOf<Product?>(null) }
     var stockProduct by remember { mutableStateOf<Product?>(null) }
     var counts by remember { mutableStateOf<List<InventoryCount>>(emptyList()) }
@@ -68,6 +75,7 @@ fun InventoryPage(context: ShopContext) {
 
     suspend fun refresh() {
         products = StoreRepository.products(context.shop.id)
+        categories = StoreRepository.categories(context.shop.id)
         counts = StoreRepository.inventoryCounts(context.shop.id)
     }
 
@@ -96,6 +104,11 @@ fun InventoryPage(context: ShopContext) {
             "${products.size} product(s)",
             action = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { categoryManagerOpen = true }) {
+                        Icon(Icons.Rounded.Category, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Categories")
+                    }
                     OutlinedButton(
                         onClick = {
                             scope.launch {
@@ -202,6 +215,7 @@ fun InventoryPage(context: ShopContext) {
     if (addOpen) {
         AddProductDialog(
             context = context,
+            categories = categories.filter { it.isActive },
             onDismiss = { addOpen = false },
             onSave = { input ->
                 scope.launch {
@@ -220,6 +234,7 @@ fun InventoryPage(context: ShopContext) {
     editProduct?.let { product ->
         EditProductDialog(
             product = product,
+            categories = categories,
             onDismiss = { editProduct = null },
             onSave = { updated ->
                 scope.launch {
@@ -229,6 +244,31 @@ fun InventoryPage(context: ShopContext) {
                             editProduct = null
                             refresh()
                         }
+                        .onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
+    if (categoryManagerOpen) {
+        CategoryManagerDialog(
+            shopId = context.shop.id,
+            categories = categories,
+            productCounts = products.groupingBy { it.categoryId }.eachCount(),
+            onDismiss = { categoryManagerOpen = false },
+            onAdd = { input ->
+                scope.launch {
+                    error = null
+                    runCatching { StoreRepository.addCategory(input) }
+                        .onSuccess { refresh() }
+                        .onFailure { error = StoreRepository.userMessage(it) }
+                }
+            },
+            onUpdate = { category ->
+                scope.launch {
+                    error = null
+                    runCatching { StoreRepository.updateCategory(category) }
+                        .onSuccess { refresh() }
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
             }
@@ -294,11 +334,14 @@ fun InventoryPage(context: ShopContext) {
 @Composable
 private fun AddProductDialog(
     context: ShopContext,
+    categories: List<ProductCategory>,
     onDismiss: () -> Unit,
     onSave: (ProductInsert) -> Unit
 ) {
     var sku by remember { mutableStateOf("") }
     var barcode by remember { mutableStateOf("") }
+    var categoryId by remember { mutableStateOf<String?>(null) }
+    var categoryMenu by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var brand by remember { mutableStateOf("") }
     var partNumber by remember { mutableStateOf("") }
@@ -318,6 +361,25 @@ private fun AddProductDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.heightIn(max = 560.dp)
             ) {
+                item {
+                    Box {
+                        OutlinedButton(onClick = { categoryMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text(categories.firstOrNull { it.id == categoryId }?.name ?: "Category (optional)")
+                        }
+                        DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
+                            DropdownMenuItem(text = { Text("No category") }, onClick = {
+                                categoryId = null
+                                categoryMenu = false
+                            })
+                            categories.forEach { category ->
+                                DropdownMenuItem(text = { Text(category.name) }, onClick = {
+                                    categoryId = category.id
+                                    categoryMenu = false
+                                })
+                            }
+                        }
+                    }
+                }
                 item { OutlinedTextField(sku, { sku = it }, label = { Text("SKU") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -379,6 +441,7 @@ private fun AddProductDialog(
                     onSave(
                         ProductInsert(
                             shopId = context.shop.id,
+                            categoryId = categoryId,
                             sku = sku.trim(),
                             barcode = barcode.trim().ifBlank { null },
                             name = name.trim(),
@@ -402,10 +465,13 @@ private fun AddProductDialog(
 @Composable
 private fun EditProductDialog(
     product: Product,
+    categories: List<ProductCategory>,
     onDismiss: () -> Unit,
     onSave: (Product) -> Unit
 ) {
     var name by remember(product.id) { mutableStateOf(product.name) }
+    var categoryId by remember(product.id) { mutableStateOf(product.categoryId) }
+    var categoryMenu by remember(product.id) { mutableStateOf(false) }
     var brand by remember(product.id) { mutableStateOf(product.brand.orEmpty()) }
     var barcode by remember(product.id) { mutableStateOf(product.barcode.orEmpty()) }
     var partNumber by remember(product.id) { mutableStateOf(product.partNumber.orEmpty()) }
@@ -423,6 +489,26 @@ private fun EditProductDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.heightIn(max = 560.dp)
             ) {
+                item {
+                    Box {
+                        OutlinedButton(onClick = { categoryMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                            val selected = categories.firstOrNull { it.id == categoryId }
+                            Text(selected?.name ?: "Category (optional)")
+                        }
+                        DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
+                            DropdownMenuItem(text = { Text("No category") }, onClick = {
+                                categoryId = null
+                                categoryMenu = false
+                            })
+                            categories.filter { it.isActive || it.id == categoryId }.forEach { category ->
+                                DropdownMenuItem(text = { Text(category.name + if (!category.isActive) " (disabled)" else "") }, onClick = {
+                                    categoryId = category.id
+                                    categoryMenu = false
+                                })
+                            }
+                        }
+                    }
+                }
                 item { OutlinedTextField(name, { name = it }, label = { Text("Product name") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
                 item { OutlinedTextField(barcode, { barcode = it }, label = { Text("Barcode") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
                 item { OutlinedTextField(brand, { brand = it }, label = { Text("Brand") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
@@ -461,6 +547,7 @@ private fun EditProductDialog(
                     onSave(
                         product.copy(
                             name = name.trim(),
+                            categoryId = categoryId,
                             brand = brand.trim().ifBlank { null },
                             barcode = barcode.trim().ifBlank { null },
                             partNumber = partNumber.trim().ifBlank { null },
@@ -476,6 +563,140 @@ private fun EditProductDialog(
             ) { Text("Save changes") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun CategoryManagerDialog(
+    shopId: String,
+    categories: List<ProductCategory>,
+    productCounts: Map<String?, Int>,
+    onDismiss: () -> Unit,
+    onAdd: (ProductCategoryInsert) -> Unit,
+    onUpdate: (ProductCategory) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf<ProductCategory?>(null) }
+    val duplicate = categories.any {
+        it.name.equals(name.trim(), ignoreCase = true) && it.id != editing?.id
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Manage categories", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Categories sync with StorePOS Cloud and are shared with the web dashboard.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text(if (editing == null) "New category" else "Category name") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        isError = duplicate
+                    )
+                    Button(
+                        onClick = {
+                            val cleanName = name.trim()
+                            if (editing == null) {
+                                onAdd(
+                                    ProductCategoryInsert(
+                                        shopId = shopId,
+                                        name = cleanName,
+                                        description = description.trim().ifBlank { null },
+                                        sortOrder = (categories.maxOfOrNull { it.sortOrder } ?: -1) + 1
+                                    )
+                                )
+                            } else {
+                                onUpdate(editing!!.copy(
+                                    name = cleanName,
+                                    description = description.trim().ifBlank { null }
+                                ))
+                            }
+                            name = ""
+                            description = ""
+                            editing = null
+                        },
+                        enabled = name.isNotBlank() && !duplicate
+                    ) {
+                        Text(if (editing == null) "Add" else "Save")
+                    }
+                }
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                if (duplicate) {
+                    Text("A category with this name already exists.", color = MaterialTheme.colorScheme.error)
+                }
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(categories, key = { it.id }) { category ->
+                        Surface(tonalElevation = 2.dp, shape = RoundedCornerShape(12.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(category.name, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "${productCounts[category.id] ?: 0} product(s) • " +
+                                            if (category.isActive) "Active" else "Disabled",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val index = categories.indexOf(category)
+                                        if (index > 0) {
+                                            val other = categories[index - 1]
+                                            onUpdate(category.copy(sortOrder = other.sortOrder))
+                                            onUpdate(other.copy(sortOrder = category.sortOrder))
+                                        }
+                                    },
+                                    enabled = categories.indexOf(category) > 0
+                                ) { Icon(Icons.Rounded.KeyboardArrowUp, "Move up") }
+                                IconButton(
+                                    onClick = {
+                                        val index = categories.indexOf(category)
+                                        if (index >= 0 && index < categories.lastIndex) {
+                                            val other = categories[index + 1]
+                                            onUpdate(category.copy(sortOrder = other.sortOrder))
+                                            onUpdate(other.copy(sortOrder = category.sortOrder))
+                                        }
+                                    },
+                                    enabled = categories.indexOf(category) < categories.lastIndex
+                                ) { Icon(Icons.Rounded.KeyboardArrowDown, "Move down") }
+                                IconButton(onClick = {
+                                    editing = category
+                                    name = category.name
+                                    description = category.description.orEmpty()
+                                }) {
+                                    Icon(Icons.Rounded.Edit, "Edit category")
+                                }
+                                Switch(
+                                    checked = category.isActive,
+                                    onCheckedChange = { onUpdate(category.copy(isActive = it)) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
     )
 }
 
@@ -557,12 +778,51 @@ private fun StocktakeDialog(
         )
     }
     val submitted = count.status == "submitted"
+    var scanError by remember(count.id) { mutableStateOf<String?>(null) }
+    val stocktakeScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val code = result.contents?.trim().orEmpty()
+        if (code.isNotBlank() && !submitted) {
+            val product = products.firstOrNull {
+                it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
+            }
+            val item = product?.let { p -> items.firstOrNull { it.productId == p.id } }
+            if (product == null || item == null) {
+                scanError = "Barcode / SKU is not part of this stocktake: $code"
+            } else {
+                val current = values[item.productId]?.toDoubleOrNull() ?: 0.0
+                values = values.toMutableMap().apply {
+                    put(item.productId, (current + 1.0).let { next ->
+                        if (next % 1.0 == 0.0) next.toInt().toString() else next.toString()
+                    })
+                }
+                scanError = null
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Stocktake " + count.countNumber) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!submitted) {
+                    Button(
+                        onClick = {
+                            stocktakeScanner.launch(
+                                ScanOptions()
+                                    .setPrompt("Scan item to count")
+                                    .setBeepEnabled(true)
+                                    .setOrientationLocked(false)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.QrCodeScanner, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Scan item +1")
+                    }
+                    scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
                 Text(
                     if (submitted)
                         "Review variances before approval. Approval posts inventory adjustment movements."

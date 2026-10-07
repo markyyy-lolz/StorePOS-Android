@@ -123,6 +123,39 @@ object StoreRepository {
         return ShopContext(userId, shop, membership)
     }
 
+    suspend fun shopMembers(shopId: String): List<ShopMember> =
+        client.from("shop_members").select {
+            filter { eq("shop_id", shopId) }
+        }.decodeList<ShopMember>().sortedBy { it.role }
+
+    suspend fun userProfiles(): List<UserProfile> =
+        client.from("user_profiles").select().decodeList<UserProfile>()
+
+    suspend fun updateMemberRole(memberId: String, role: String, active: Boolean = true) {
+        require(role in setOf("owner", "admin", "manager", "cashier", "inventory", "mechanic")) {
+            "Unsupported StorePOS role."
+        }
+        client.from("shop_members").update({
+            set("role", role)
+            set("is_active", active)
+        }) {
+            filter { eq("id", memberId) }
+        }
+    }
+
+    suspend fun deviceSessions(shopId: String): List<DeviceSession> =
+        client.from("device_sessions").select {
+            filter { eq("shop_id", shopId) }
+        }.decodeList<DeviceSession>().sortedByDescending { it.lastSeenAt }
+
+    suspend fun setDeviceSessionActive(sessionId: String, active: Boolean) {
+        client.from("device_sessions").update({
+            set("is_active", active)
+        }) {
+            filter { eq("id", sessionId) }
+        }
+    }
+
     suspend fun createFirstShop(name: String, phone: String?, address: String?): ShopContext {
         requireNotNull(currentUserId()) { "You must be signed in." }
 
@@ -233,6 +266,7 @@ object StoreRepository {
     suspend fun updateProduct(product: Product) {
         client.from("products").update({
             set("name", product.name)
+            set("category_id", product.categoryId)
             set("brand", product.brand)
             set("barcode", product.barcode)
             set("part_number", product.partNumber)
@@ -296,7 +330,22 @@ object StoreRepository {
     suspend fun categories(shopId: String): List<ProductCategory> =
         client.from("product_categories").select {
             filter { eq("shop_id", shopId) }
-        }.decodeList()
+        }.decodeList<ProductCategory>()
+            .sortedWith(compareBy<ProductCategory> { it.sortOrder }.thenBy { it.name.lowercase() })
+
+    suspend fun addCategory(input: ProductCategoryInsert): ProductCategory =
+        client.from("product_categories").insert(input) { select() }.decodeSingle()
+
+    suspend fun updateCategory(category: ProductCategory) {
+        client.from("product_categories").update({
+            set("name", category.name.trim())
+            set("description", category.description?.trim()?.ifBlank { null })
+            set("sort_order", category.sortOrder)
+            set("is_active", category.isActive)
+        }) {
+            filter { eq("id", category.id) }
+        }
+    }
 
     suspend fun customers(shopId: String): List<Customer> =
         client.from("customers").select {

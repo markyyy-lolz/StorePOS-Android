@@ -32,6 +32,7 @@ enum class AppPage(val label: String, val icon: ImageVector) {
     Dashboard("Dashboard", Icons.Rounded.Dashboard),
     POS("POS", Icons.Rounded.PointOfSale),
     Inventory("Inventory", Icons.Rounded.Inventory2),
+    RetailOps("Retail Ops", Icons.Rounded.Hub),
     Retail("Retail Suite", Icons.Rounded.Store),
     Control("Retail Control", Icons.Rounded.AdminPanelSettings),
     Customers("Customers", Icons.Rounded.Groups),
@@ -269,16 +270,16 @@ fun StorePosApp() {
 }
 
 private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) {
-    "owner", "admin", "manager" -> AppPage.entries
+    "owner", "admin", "manager" -> AppPage.entries.filterNot {
+        it in setOf(AppPage.Retail, AppPage.Control, AppPage.Operations)
+    }
     "cashier" -> listOf(
         AppPage.Dashboard,
         AppPage.POS,
-        AppPage.Retail,
-        AppPage.Control,
+        AppPage.RetailOps,
         AppPage.Customers,
         AppPage.Service,
         AppPage.Quotations,
-        AppPage.Operations,
         AppPage.Alerts,
         AppPage.Support,
         AppPage.Settings
@@ -286,10 +287,8 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
     "inventory" -> listOf(
         AppPage.Dashboard,
         AppPage.Inventory,
-        AppPage.Retail,
-        AppPage.Control,
+        AppPage.RetailOps,
         AppPage.Suppliers,
-        AppPage.Operations,
         AppPage.Alerts,
         AppPage.Support,
         AppPage.Settings
@@ -299,7 +298,7 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
         AppPage.Customers,
         AppPage.Service,
         AppPage.Quotations,
-        AppPage.Operations,
+        AppPage.RetailOps,
         AppPage.Alerts,
         AppPage.Support,
         AppPage.Settings
@@ -314,6 +313,7 @@ private fun pageAllowedByPlan(page: AppPage, entitlements: PlanEntitlements): Bo
     return when (page) {
         AppPage.POS -> "pos" in features
         AppPage.Inventory -> "inventory" in features
+        AppPage.RetailOps -> features.any { it in setOf("retail_suite", "inventory", "operations", "pos") }
         AppPage.Retail -> features.any { it in setOf("retail_suite", "inventory", "operations", "pos") }
         AppPage.Control -> features.any { it in setOf("retail_suite", "inventory", "operations", "pos") }
         AppPage.Customers -> "customers" in features
@@ -611,10 +611,11 @@ private fun PageContent(
                     onOpenInventory = { onNavigate(AppPage.Inventory) },
                     onOpenService = { onNavigate(AppPage.Service) },
                     onOpenQuotations = { onNavigate(AppPage.Quotations) },
-                    onOpenOperations = { onNavigate(AppPage.Operations) }
+                    onOpenOperations = { onNavigate(AppPage.RetailOps) }
                 )
                 AppPage.POS -> com.storepos.app.ui.screens.PosPage(context, entitlements)
                 AppPage.Inventory -> com.storepos.app.ui.screens.InventoryPage(context)
+                AppPage.RetailOps -> com.storepos.app.ui.screens.RetailOperationsPage(context)
                 AppPage.Retail -> com.storepos.app.ui.screens.RetailSuitePage(context)
                 AppPage.Control -> com.storepos.app.ui.screens.RetailControlPage(context)
                 AppPage.Customers -> com.storepos.app.ui.screens.CustomersPage(context)
@@ -630,7 +631,7 @@ private fun PageContent(
                         val next = when (target) {
                             "inventory" -> AppPage.Inventory
                             "service" -> AppPage.Service
-                            "operations" -> AppPage.Operations
+                            "operations" -> AppPage.RetailOps
                             "support" -> AppPage.Support
                             else -> AppPage.Dashboard
                         }

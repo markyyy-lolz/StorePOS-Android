@@ -7,9 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CloudDone
-import androidx.compose.material.icons.rounded.MenuBook
-import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -20,8 +18,11 @@ import androidx.compose.ui.unit.dp
 import com.storepos.app.BuildConfig
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.AppVersion
+import com.storepos.app.data.model.DeviceSession
 import com.storepos.app.data.model.ShopContext
+import com.storepos.app.data.model.ShopMember
 import com.storepos.app.data.model.ShopSettings
+import com.storepos.app.data.model.UserProfile
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.launch
 
@@ -29,6 +30,16 @@ import kotlinx.coroutines.launch
 fun SettingsPage(context: ShopContext) {
     val androidContext = LocalContext.current
     val scope = rememberCoroutineScope()
+    val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
+    val canAdmin = context.member.role.lowercase() in setOf("owner", "admin")
+    val canTraining = context.member.role.lowercase() in setOf("owner", "admin", "manager")
+    var trainingMode by remember(context.shop.id) {
+        mutableStateOf(prefs.getBoolean("training_mode_" + context.shop.id, false))
+    }
+    var devices by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
+    var members by remember { mutableStateOf<List<ShopMember>>(emptyList()) }
+    var profiles by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
+    var adminLoading by remember { mutableStateOf(false) }
     var latest by remember { mutableStateOf<AppVersion?>(null) }
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var posSettingsOpen by remember { mutableStateOf(false) }
@@ -37,10 +48,29 @@ fun SettingsPage(context: ShopContext) {
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    suspend fun refreshAdminData() {
+        if (!canAdmin) return
+        adminLoading = true
+        runCatching {
+            val loadedDevices = StoreRepository.deviceSessions(context.shop.id)
+            val loadedMembers = StoreRepository.shopMembers(context.shop.id)
+            val loadedProfiles = StoreRepository.userProfiles()
+            Triple(loadedDevices, loadedMembers, loadedProfiles)
+        }.onSuccess { (loadedDevices, loadedMembers, loadedProfiles) ->
+            devices = loadedDevices
+            members = loadedMembers
+            profiles = loadedProfiles
+        }.onFailure {
+            error = StoreRepository.userMessage(it)
+        }
+        adminLoading = false
+    }
+
     LaunchedEffect(context.shop.id) {
         runCatching { StoreRepository.shopSettings(context.shop.id) }
             .onSuccess { posSettings = it }
             .onFailure { error = StoreRepository.userMessage(it) }
+        refreshAdminData()
     }
 
     Column(
@@ -64,6 +94,125 @@ fun SettingsPage(context: ShopContext) {
                 Column {
                     Text("Supabase Cloud", fontWeight = FontWeight.Bold)
                     Text("Connected • secure RLS • realtime-ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        if (canTraining) {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.School,
+                        contentDescription = null,
+                        tint = if (trainingMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Training Mode", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (trainingMode)
+                                "ON • POS checkouts stay local and do not change real sales, stock or cloud reports."
+                            else
+                                "Practice cashier transactions without affecting production data.",
+                            color = if (trainingMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = trainingMode,
+                        onCheckedChange = { enabled ->
+                            trainingMode = enabled
+                            prefs.edit().putBoolean("training_mode_" + context.shop.id, enabled).apply()
+                        }
+                    )
+                }
+                if (trainingMode) {
+                    Text(
+                        "TRAINING MODE is device-only. StorePOS will clearly mark training transactions and block PayMongo/real checkout posting.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        if (canAdmin) {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.ManageAccounts, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Staff & Permissions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Role-based access is enforced by StorePOS navigation and Supabase RLS.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(
+                        onClick = { scope.launch { refreshAdminData() } },
+                        enabled = !adminLoading
+                    ) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Refresh staff and devices")
+                    }
+                }
+                if (adminLoading && members.isEmpty()) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    members.forEach { member ->
+                        StaffPermissionRow(
+                            member = member,
+                            profile = profiles.firstOrNull { it.id == member.userId },
+                            currentUserId = context.userId,
+                            currentRole = context.member.role,
+                            onChange = { role, active ->
+                                scope.launch {
+                                    error = null
+                                    runCatching {
+                                        StoreRepository.updateMemberRole(member.id, role, active)
+                                    }.onSuccess {
+                                        refreshAdminData()
+                                    }.onFailure {
+                                        error = StoreRepository.userMessage(it)
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            MotoCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Devices, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Device Management", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            devices.count { it.isActive }.toString() + " active terminal(s) • revoke a device to require license reactivation",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (devices.isEmpty()) {
+                    Text("No StorePOS device sessions found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    devices.take(12).forEach { session ->
+                        DeviceSessionRow(
+                            session = session,
+                            profile = profiles.firstOrNull { it.id == session.userId },
+                            onSetActive = { active ->
+                                scope.launch {
+                                    error = null
+                                    runCatching {
+                                        StoreRepository.setDeviceSessionActive(session.id, active)
+                                    }.onSuccess {
+                                        refreshAdminData()
+                                    }.onFailure {
+                                        error = StoreRepository.userMessage(it)
+                                    }
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -214,7 +363,6 @@ fun SettingsPage(context: ShopContext) {
             }
         }
     if (receiptDesignerOpen) {
-        val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
         val previewPaperWidth = prefs.getInt("paper_width", posSettings.printerPaperWidthMm)
         ReceiptDesignerDialog(
             shop = context.shop,
@@ -261,6 +409,101 @@ fun SettingsPage(context: ShopContext) {
     }
 }
 
+
+@Composable
+private fun StaffPermissionRow(
+    member: ShopMember,
+    profile: UserProfile?,
+    currentUserId: String,
+    currentRole: String,
+    onChange: (String, Boolean) -> Unit
+) {
+    var menuOpen by remember(member.id) { mutableStateOf(false) }
+    val role = member.role.lowercase()
+    val self = member.userId == currentUserId
+    val canEdit = role != "owner" && !self &&
+        (currentRole.lowercase() == "owner" || (currentRole.lowercase() == "admin" && role != "admin"))
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(profile?.displayName ?: "Staff " + member.userId.take(8), fontWeight = FontWeight.Bold)
+                Text(
+                    rolePermissionSummary(role),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Box {
+                OutlinedButton(onClick = { menuOpen = true }, enabled = canEdit) {
+                    Text(role.uppercase())
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    listOf("admin", "manager", "cashier", "inventory", "mechanic").forEach { next ->
+                        DropdownMenuItem(
+                            text = { Text(next.replaceFirstChar { it.uppercase() }) },
+                            onClick = {
+                                menuOpen = false
+                                onChange(next, member.isActive)
+                            }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = member.isActive,
+                onCheckedChange = { onChange(role, it) },
+                enabled = canEdit
+            )
+        }
+        HorizontalDivider()
+    }
+}
+
+private fun rolePermissionSummary(role: String): String = when (role.lowercase()) {
+    "owner" -> "Full business, billing, staff, device and operational access"
+    "admin" -> "Full StorePOS operations, staff roles and device management"
+    "manager" -> "POS, approvals, returns, reports, inventory and operations"
+    "cashier" -> "POS, customers, quotations and cashier operations"
+    "inventory" -> "Inventory, suppliers, stocktake, transfers and retail control"
+    "mechanic" -> "Customer/service workflow and operational follow-up"
+    else -> "Limited StorePOS access"
+}
+
+@Composable
+private fun DeviceSessionRow(
+    session: DeviceSession,
+    profile: UserProfile?,
+    onSetActive: (Boolean) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Icon(
+            if (session.isActive) Icons.Rounded.TabletAndroid else Icons.Rounded.Block,
+            contentDescription = null,
+            tint = if (session.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(session.deviceName ?: session.deviceId, fontWeight = FontWeight.Bold)
+            Text(
+                listOfNotNull(
+                    session.appVersion?.let { "v$it" },
+                    profile?.displayName,
+                    "Last seen " + session.lastSeenAt.replace("T", " ").take(16)
+                ).joinToString(" • "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        OutlinedButton(onClick = { onSetActive(!session.isActive) }) {
+            Text(if (session.isActive) "Revoke" else "Reactivate")
+        }
+    }
+}
 
 @Composable
 private fun PosSystemSettingsDialog(

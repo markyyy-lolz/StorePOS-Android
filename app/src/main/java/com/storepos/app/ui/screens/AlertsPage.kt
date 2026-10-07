@@ -40,6 +40,7 @@ fun AlertsPage(
     val androidContext = LocalContext.current
     val scope = rememberCoroutineScope()
     var alerts by remember { mutableStateOf<List<ShopAlert>>(emptyList()) }
+    var severityFilter by remember { mutableStateOf("all") }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -131,6 +132,28 @@ fun AlertsPage(
 
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
+        if (alerts.isNotEmpty()) {
+            val criticalCount = alerts.count { it.severity.equals("critical", true) }
+            val warningCount = alerts.count { it.severity.equals("warning", true) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = severityFilter == "all",
+                    onClick = { severityFilter = "all" },
+                    label = { Text("All " + alerts.size) }
+                )
+                FilterChip(
+                    selected = severityFilter == "critical",
+                    onClick = { severityFilter = "critical" },
+                    label = { Text("Critical " + criticalCount) }
+                )
+                FilterChip(
+                    selected = severityFilter == "warning",
+                    onClick = { severityFilter = "warning" },
+                    label = { Text("Warnings " + warningCount) }
+                )
+            }
+        }
+
         if (alerts.isEmpty()) {
             EmptyView(
                 "Nothing needs attention",
@@ -138,11 +161,20 @@ fun AlertsPage(
                 Modifier.weight(1f)
             )
         } else {
-            LazyColumn(
+            val visibleAlerts = alerts.filter {
+                severityFilter == "all" || it.severity.equals(severityFilter, true)
+            }
+            if (visibleAlerts.isEmpty()) {
+                EmptyView(
+                    "No alerts in this filter",
+                    "Try All to view the complete StorePOS notification center.",
+                    Modifier.weight(1f)
+                )
+            } else LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
-                items(alerts, key = { it.code }) { alert ->
+                items(visibleAlerts, key = { it.code }) { alert ->
                     val container = when (alert.severity.lowercase()) {
                         "critical" -> MaterialTheme.colorScheme.errorContainer
                         "warning" -> MaterialTheme.colorScheme.tertiaryContainer

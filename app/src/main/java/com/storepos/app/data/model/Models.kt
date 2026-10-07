@@ -30,8 +30,40 @@ data class ShopMember(
 )
 
 @Serializable
+data class UserProfile(
+    val id: String,
+    @SerialName("display_name") val displayName: String,
+    val username: String? = null,
+    val phone: String? = null,
+    @SerialName("avatar_url") val avatarUrl: String? = null,
+    @SerialName("is_active") val isActive: Boolean = true
+)
+
+@Serializable
+data class DeviceSession(
+    val id: String,
+    @SerialName("shop_id") val shopId: String,
+    @SerialName("user_id") val userId: String,
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("device_name") val deviceName: String? = null,
+    @SerialName("app_version") val appVersion: String? = null,
+    @SerialName("last_seen_at") val lastSeenAt: String,
+    @SerialName("is_active") val isActive: Boolean = true,
+    @SerialName("created_at") val createdAt: String
+)
+
+@Serializable
 data class ProductCategory(
     val id: String,
+    @SerialName("shop_id") val shopId: String,
+    val name: String,
+    val description: String? = null,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("is_active") val isActive: Boolean = true
+)
+
+@Serializable
+data class ProductCategoryInsert(
     @SerialName("shop_id") val shopId: String,
     val name: String,
     val description: String? = null,
@@ -422,7 +454,7 @@ data class AppVersion(
     val name: String,
     val brand: String? = null,
     @SerialName("part_number") val partNumber: String? = null,
-    @SerialName("item_type") val itemType: String = "part",
+    @SerialName("item_type") val itemType: String = "product",
     @SerialName("cost_price") val costPrice: Double,
     @SerialName("selling_price") val sellingPrice: Double,
     @SerialName("wholesale_price") val wholesalePrice: Double? = null,
