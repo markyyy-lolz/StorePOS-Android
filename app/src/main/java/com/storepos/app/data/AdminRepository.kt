@@ -3,6 +3,7 @@ package com.storepos.app.data
 import com.storepos.app.data.model.AuditLog
 import com.storepos.app.data.model.SupplierPayable
 import com.storepos.app.data.model.SupplierPayment
+import com.storepos.app.data.model.MemberPermissionOverride
 import com.storepos.app.data.remote.SupabaseProvider
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
@@ -11,6 +12,29 @@ import kotlinx.serialization.json.put
 
 object AdminRepository {
     private val client get() = SupabaseProvider.client
+
+    suspend fun memberPermissions(memberId: String): List<MemberPermissionOverride> =
+        client.from("shop_member_permissions").select {
+            filter { eq("member_id", memberId) }
+        }.decodeList<MemberPermissionOverride>()
+
+    suspend fun setMemberPermission(
+        shopId: String,
+        memberId: String,
+        permissionKey: String,
+        allowed: Boolean
+    ) {
+        client.from("shop_member_permissions").upsert(
+            mapOf(
+                "shop_id" to shopId,
+                "member_id" to memberId,
+                "permission_key" to permissionKey,
+                "allowed" to allowed
+            )
+        ) {
+            onConflict = "member_id,permission_key"
+        }
+    }
 
     suspend fun auditLogs(shopId: String): List<AuditLog> =
         client.from("audit_logs").select {
