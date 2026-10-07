@@ -3,9 +3,13 @@ package com.storepos.app.display
 import android.app.Presentation
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -38,7 +42,10 @@ class CustomerDisplayController(private val context: Context) {
             }
         }
 
-        presentation?.setContentView(buildContent(shopName, cart))
+        // IMPORTANT: build the UI with the Presentation context so dp/sp scaling
+        // follows the second display instead of the cashier display.
+        val displayContext = presentation?.context ?: context
+        presentation?.setContentView(buildContent(displayContext, shopName, cart))
         return true
     }
 
@@ -48,58 +55,102 @@ class CustomerDisplayController(private val context: Context) {
         activeDisplayId = null
     }
 
-    private fun buildContent(shopName: String, cart: List<CartLine>): LinearLayout {
-        val root = LinearLayout(context).apply {
+    private fun buildContent(
+        displayContext: Context,
+        shopName: String,
+        cart: List<CartLine>
+    ): View {
+        val metrics = displayContext.resources.displayMetrics
+        val widthDp = metrics.widthPixels / metrics.density
+        val wide = widthDp >= 720f
+        val itemCount = cart.sumOf { it.quantity }
+        val total = cart.sumOf { it.lineTotal }
+
+        val root = LinearLayout(displayContext).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(42, 36, 42, 36)
-            setBackgroundColor(Color.rgb(247, 250, 253))
+            setPadding(dp(displayContext, 26), dp(displayContext, 22), dp(displayContext, 26), dp(displayContext, 20))
+            background = gradient(
+                intArrayOf(
+                    Color.rgb(7, 18, 34),
+                    Color.rgb(10, 40, 72),
+                    Color.rgb(10, 67, 118)
+                ),
+                radius = 0f
+            )
         }
 
-        root.addView(text(shopName, 30f, true).apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(19, 55, 96))
-        }, matchWidth())
-
-        root.addView(text("Customer Display", 16f, false).apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-        }, matchWidth())
-
-        val scroll = ScrollView(context)
-        val list = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 24, 0, 24)
+        // Header
+        val header = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
 
-        if (cart.isEmpty()) {
-            list.addView(text("Ready for your order", 24f, true).apply {
-                gravity = Gravity.CENTER
-                setPadding(0, 80, 0, 80)
-            }, matchWidth())
-        } else {
-            cart.forEach { line ->
-                val row = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(8, 14, 8, 14)
+        val brand = text(displayContext, "STOREPOS", 13f, true).apply {
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
+            background = rounded(Color.rgb(20, 118, 255), 999f)
+        }
+        header.addView(brand)
+
+        val titleWrap = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(displayContext, 14), 0, 0, 0)
+        }
+        titleWrap.addView(text(displayContext, shopName, if (wide) 25f else 21f, true).apply {
+            setTextColor(Color.WHITE)
+            maxLines = 1
+        })
+        titleWrap.addView(text(displayContext, "Customer display • Live checkout", 12.5f, false).apply {
+            setTextColor(Color.rgb(185, 211, 235))
+        })
+        header.addView(
+            titleWrap,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+
+        val livePill = text(displayContext, "●  LIVE", 12f, true).apply {
+            setTextColor(Color.rgb(84, 230, 161))
+            gravity = Gravity.CENTER
+            setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
+            background = rounded(Color.argb(38, 84, 230, 161), 999f)
+        }
+        header.addView(livePill)
+
+        root.addView(header, matchWidth())
+        root.addView(space(displayContext, 16))
+
+        val content = LinearLayout(displayContext).apply {
+            orientation = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            gravity = Gravity.TOP
+        }
+
+        val orderCard = buildOrderCard(displayContext, cart, itemCount, wide)
+        val summaryCard = buildSummaryCard(displayContext, cart.isEmpty(), itemCount, total, wide)
+
+        if (wide) {
+            content.addView(
+                orderCard,
+                LinearLayout.LayoutParams(0, 0, 1.65f).apply {
+                    height = ViewGroup.LayoutParams.MATCH_PARENT
+                    marginEnd = dp(displayContext, 14)
                 }
-                row.addView(
-                    text(
-                        line.product.name + "\n" + qty(line.quantity) + " × " + money(line.unitPrice),
-                        18f,
-                        false
-                    ),
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                )
-                row.addView(text(money(line.lineTotal), 20f, true))
-                list.addView(row, matchWidth())
-            }
+            )
+            content.addView(
+                summaryCard,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.85f)
+            )
+        } else {
+            content.addView(
+                orderCard,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            )
+            content.addView(space(displayContext, 12))
+            content.addView(summaryCard, matchWidth())
         }
 
-        scroll.addView(list, matchWidth())
         root.addView(
-            scroll,
+            content,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -107,33 +158,299 @@ class CustomerDisplayController(private val context: Context) {
             )
         )
 
-        val total = cart.sumOf { it.lineTotal }
-        root.addView(text("TOTAL  " + money(total), 34f, true).apply {
-            gravity = Gravity.END
-            setTextColor(Color.rgb(11, 79, 216))
-            setPadding(0, 18, 0, 8)
-        }, matchWidth())
-
-        root.addView(text("Thank you for shopping with us.", 15f, false).apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.GRAY)
-        }, matchWidth())
+        root.addView(space(displayContext, 12))
+        root.addView(
+            text(
+                displayContext,
+                if (cart.isEmpty())
+                    "Waiting for the cashier to start your order"
+                else
+                    "Your order updates automatically as items are scanned",
+                11.5f,
+                false
+            ).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(183, 205, 226))
+            },
+            matchWidth()
+        )
 
         return root
     }
 
-    private fun text(value: String, size: Float, bold: Boolean): TextView =
-        TextView(context).apply {
-            text = value
-            textSize = size
-            setTextColor(Color.rgb(25, 34, 50))
-            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+    private fun buildOrderCard(
+        context: Context,
+        cart: List<CartLine>,
+        itemCount: Double,
+        wide: Boolean
+    ): View {
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(context, 22), dp(context, 20), dp(context, 22), dp(context, 18))
+            background = rounded(Color.rgb(249, 252, 255), 24f)
         }
+
+        val heading = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        heading.addView(
+            text(context, "Your order", if (wide) 22f else 19f, true).apply {
+                setTextColor(Color.rgb(19, 34, 55))
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        heading.addView(text(context, itemLabel(itemCount), 12f, true).apply {
+            setTextColor(Color.rgb(18, 99, 214))
+            gravity = Gravity.CENTER
+            setPadding(dp(context, 10), dp(context, 6), dp(context, 10), dp(context, 6))
+            background = rounded(Color.rgb(229, 240, 255), 999f)
+        })
+        card.addView(heading)
+        card.addView(space(context, 12))
+
+        if (cart.isEmpty()) {
+            val emptyWrap = FrameLayout(context)
+            val empty = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(context, 24), dp(context, 26), dp(context, 24), dp(context, 26))
+            }
+
+            empty.addView(text(context, "READY WHEN YOU ARE", 12f, true).apply {
+                setTextColor(Color.rgb(18, 99, 214))
+                letterSpacing = 0.12f
+                gravity = Gravity.CENTER
+            }, matchWidth())
+
+            empty.addView(space(context, 10))
+            empty.addView(text(context, "Ready for your order", if (wide) 30f else 24f, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(20, 35, 57))
+            }, matchWidth())
+
+            empty.addView(space(context, 8))
+            empty.addView(text(context, "Items will appear here as the cashier scans them.", 14f, false).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(103, 119, 139))
+            }, matchWidth())
+
+            emptyWrap.addView(
+                empty,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER
+                )
+            )
+            card.addView(
+                emptyWrap,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            )
+        } else {
+            val columnHeader = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(context, 10), dp(context, 8), dp(context, 10), dp(context, 8))
+                background = rounded(Color.rgb(239, 245, 252), 12f)
+            }
+            columnHeader.addView(
+                text(context, "ITEM", 10.5f, true).apply { setTextColor(Color.rgb(105, 122, 143)) },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            )
+            columnHeader.addView(
+                text(context, "AMOUNT", 10.5f, true).apply {
+                    gravity = Gravity.END
+                    setTextColor(Color.rgb(105, 122, 143))
+                },
+                LinearLayout.LayoutParams(dp(context, if (wide) 150 else 110), ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
+            card.addView(columnHeader)
+            card.addView(space(context, 7))
+
+            val scroll = ScrollView(context).apply {
+                isFillViewport = true
+                isVerticalScrollBarEnabled = false
+            }
+            val list = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+
+            cart.forEachIndexed { index, line ->
+                val row = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(context, 9), dp(context, 10), dp(context, 9), dp(context, 10))
+                }
+
+                val qtyBadge = text(context, qty(line.quantity), 13f, true).apply {
+                    setTextColor(Color.rgb(18, 99, 214))
+                    gravity = Gravity.CENTER
+                    minWidth = dp(context, 38)
+                    setPadding(dp(context, 8), dp(context, 7), dp(context, 8), dp(context, 7))
+                    background = rounded(Color.rgb(231, 241, 255), 12f)
+                }
+                row.addView(qtyBadge)
+
+                val itemText = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(context, 12), 0, dp(context, 10), 0)
+                }
+                itemText.addView(text(context, line.product.name, if (wide) 16f else 14f, true).apply {
+                    setTextColor(Color.rgb(24, 39, 60))
+                    maxLines = 2
+                })
+                itemText.addView(text(context, money(line.unitPrice) + " each", 11.5f, false).apply {
+                    setTextColor(Color.rgb(111, 126, 145))
+                })
+
+                row.addView(
+                    itemText,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                )
+
+                row.addView(
+                    text(context, money(line.lineTotal), if (wide) 17f else 15f, true).apply {
+                        gravity = Gravity.END
+                        setTextColor(Color.rgb(14, 56, 103))
+                    },
+                    LinearLayout.LayoutParams(dp(context, if (wide) 150 else 110), ViewGroup.LayoutParams.WRAP_CONTENT)
+                )
+
+                list.addView(row, matchWidth())
+
+                if (index != cart.lastIndex) {
+                    list.addView(View(context).apply {
+                        setBackgroundColor(Color.rgb(230, 236, 243))
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(context, 1)))
+                }
+            }
+
+            scroll.addView(list, matchWidth())
+            card.addView(
+                scroll,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            )
+        }
+
+        return card
+    }
+
+    private fun buildSummaryCard(
+        context: Context,
+        empty: Boolean,
+        itemCount: Double,
+        total: Double,
+        wide: Boolean
+    ): View {
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(context, 22), dp(context, 22), dp(context, 22), dp(context, 20))
+            background = rounded(Color.rgb(15, 84, 163), 24f)
+        }
+
+        card.addView(text(context, if (empty) "CURRENT TOTAL" else "AMOUNT DUE", 11f, true).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.14f
+            setTextColor(Color.rgb(192, 221, 255))
+        }, matchWidth())
+
+        card.addView(space(context, 8))
+
+        card.addView(text(context, money(total), if (wide) 37f else 31f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            maxLines = 1
+        }, matchWidth())
+
+        card.addView(space(context, 10))
+
+        card.addView(text(context, itemLabel(itemCount), 13f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(217, 234, 255))
+        }, matchWidth())
+
+        if (wide) {
+            card.addView(
+                space(context, 1),
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            )
+        } else {
+            card.addView(space(context, 16))
+        }
+
+        val thankYou = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(context, 14), dp(context, 14), dp(context, 14), dp(context, 14))
+            background = rounded(Color.argb(34, 255, 255, 255), 16f)
+        }
+        thankYou.addView(text(context, "Thank you!", 18f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        }, matchWidth())
+        thankYou.addView(text(context, "Please review your items before payment.", 11.5f, false).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(215, 231, 249))
+        }, matchWidth())
+
+        card.addView(thankYou, matchWidth())
+
+        return card
+    }
+
+    private fun text(
+        context: Context,
+        value: String,
+        size: Float,
+        bold: Boolean
+    ): TextView = TextView(context).apply {
+        text = value
+        textSize = size
+        setTextColor(Color.rgb(25, 34, 50))
+        includeFontPadding = false
+        if (bold) setTypeface(Typeface.create("sans-serif", Typeface.BOLD))
+        else typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+    }
+
+    private fun rounded(color: Int, radius: Float): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+            cornerRadius = radius
+        }
+
+    private fun gradient(colors: IntArray, radius: Float): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius
+        }
+
+    private fun dp(context: Context, value: Int): Int =
+        (value * context.resources.displayMetrics.density).toInt()
 
     private fun matchWidth() = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.WRAP_CONTENT
     )
+
+    private fun space(context: Context, heightDp: Int): View =
+        View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(1, dp(context, heightDp))
+        }
 
     private fun money(value: Double): String =
         "₱" + String.format(Locale.US, "%,.2f", value)
@@ -141,4 +458,9 @@ class CustomerDisplayController(private val context: Context) {
     private fun qty(value: Double): String =
         if (value % 1.0 == 0.0) value.toLong().toString()
         else String.format(Locale.US, "%.3f", value).trimEnd('0').trimEnd('.')
+
+    private fun itemLabel(value: Double): String {
+        val formatted = qty(value)
+        return formatted + if (value == 1.0) " item" else " items"
+    }
 }
