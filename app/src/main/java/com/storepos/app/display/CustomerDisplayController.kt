@@ -2,6 +2,8 @@ package com.storepos.app.display
 
 import android.app.Presentation
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -10,11 +12,15 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.storepos.app.data.model.CartLine
 import com.storepos.app.data.model.Sale
+import android.util.Base64
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.MultiFormatWriter
 import java.util.Locale
 
 class CustomerDisplayController(private val context: Context) {
@@ -27,7 +33,14 @@ class CustomerDisplayController(private val context: Context) {
     fun hasExternalDisplay(): Boolean =
         displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).isNotEmpty()
 
-    fun show(shopName: String, cart: List<CartLine>, completedSale: Sale? = null): Boolean {
+    fun show(
+        shopName: String,
+        cart: List<CartLine>,
+        completedSale: Sale? = null,
+        paymentQrImage: String? = null,
+        paymentAmount: Double? = null,
+        receiptUrl: String? = null
+    ): Boolean {
         val display = displayManager
             .getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
             .firstOrNull() ?: run {
@@ -47,8 +60,14 @@ class CustomerDisplayController(private val context: Context) {
         // follows the second display instead of the cashier display.
         val displayContext = presentation?.context ?: context
         presentation?.setContentView(
-            if (completedSale != null) buildCompletedContent(displayContext, shopName, completedSale)
-            else buildContent(displayContext, shopName, cart)
+            when {
+                !paymentQrImage.isNullOrBlank() && paymentAmount != null ->
+                    buildPaymentQrContent(displayContext, shopName, paymentQrImage, paymentAmount)
+                completedSale != null ->
+                    buildCompletedContent(displayContext, shopName, completedSale, receiptUrl)
+                else ->
+                    buildContent(displayContext, shopName, cart)
+            }
         )
         return true
     }
@@ -59,20 +78,15 @@ class CustomerDisplayController(private val context: Context) {
         activeDisplayId = null
     }
 
-    private fun buildCompletedContent(
+    private fun buildPaymentQrContent(
         displayContext: Context,
         shopName: String,
-        sale: Sale
+        qrValue: String,
+        amount: Double
     ): View {
         val root = LinearLayout(displayContext).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(
-                dp(displayContext, 42),
-                dp(displayContext, 34),
-                dp(displayContext, 42),
-                dp(displayContext, 34)
-            )
+            setPadding(dp(displayContext, 28), dp(displayContext, 24), dp(displayContext, 28), dp(displayContext, 24))
             background = gradient(
                 intArrayOf(
                     Color.rgb(7, 18, 34),
@@ -83,97 +97,235 @@ class CustomerDisplayController(private val context: Context) {
             )
         }
 
-        val prefs = context.getSharedPreferences("motopos_settings", 0)
-        val showBrand = prefs.getBoolean("customer_display_show_brand", true)
+        val header = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(text(displayContext, "STOREPOS", 13f, true).apply {
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
+            background = rounded(Color.rgb(20, 118, 255), 999f)
+        })
+        header.addView(text(displayContext, shopName, 24f, true).apply {
+            setTextColor(Color.WHITE)
+            setPadding(dp(displayContext, 14), 0, 0, 0)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(text(displayContext, "●  WAITING FOR PAYMENT", 11f, true).apply {
+            setTextColor(Color.rgb(84, 230, 161))
+        })
+        root.addView(header, matchWidth())
+        root.addView(space(displayContext, 18))
 
-        if (showBrand) {
-            root.addView(text(displayContext, "STOREPOS", 13f, true).apply {
-                gravity = Gravity.CENTER
-                setTextColor(Color.rgb(117, 190, 255))
-                letterSpacing = 0.12f
-            }, matchWidth())
-            root.addView(space(displayContext, 10))
+        val body = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
         }
 
-        root.addView(text(displayContext, shopName, 24f, true).apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-        }, matchWidth())
-
-        root.addView(space(displayContext, 36))
-
-        val card = LinearLayout(displayContext).apply {
+        val qrCard = LinearLayout(displayContext).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(
-                dp(displayContext, 34),
-                dp(displayContext, 30),
-                dp(displayContext, 34),
-                dp(displayContext, 30)
-            )
-            background = rounded(Color.rgb(249, 252, 255), 28f)
+            setPadding(dp(displayContext, 24), dp(displayContext, 22), dp(displayContext, 24), dp(displayContext, 22))
+            background = rounded(Color.WHITE, 26f)
         }
-
-        card.addView(text(displayContext, "PAYMENT COMPLETE", 12f, true).apply {
-            gravity = Gravity.CENTER
-            letterSpacing = 0.15f
-            setTextColor(Color.rgb(18, 99, 214))
-        }, matchWidth())
-
-        card.addView(space(displayContext, 12))
-        card.addView(text(displayContext, "Thank you!", 34f, true).apply {
+        qrCard.addView(text(displayContext, "Scan to pay", 25f, true).apply {
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(19, 34, 55))
         }, matchWidth())
+        qrCard.addView(space(displayContext, 12))
 
-        card.addView(space(displayContext, 18))
-        card.addView(text(displayContext, "Total paid", 13f, false).apply {
+        val qrBitmap = decodeBase64Bitmap(qrValue)
+        if (qrBitmap != null) {
+            qrCard.addView(ImageView(displayContext).apply {
+                setImageBitmap(qrBitmap)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                adjustViewBounds = true
+            }, LinearLayout.LayoutParams(dp(displayContext, 280), dp(displayContext, 280)))
+        } else {
+            qrCard.addView(text(displayContext, "QR image unavailable", 15f, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(180, 45, 45))
+            }, matchWidth())
+        }
+
+        qrCard.addView(space(displayContext, 10))
+        qrCard.addView(text(displayContext, "GCash • Maya • QR Ph banking apps", 13f, false).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(90, 105, 125))
+        }, matchWidth())
+
+        body.addView(
+            qrCard,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.25f).apply {
+                marginEnd = dp(displayContext, 16)
+            }
+        )
+
+        val summary = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(displayContext, 26), dp(displayContext, 28), dp(displayContext, 26), dp(displayContext, 28))
+            background = rounded(Color.rgb(15, 84, 163), 26f)
+        }
+        summary.addView(text(displayContext, "AMOUNT DUE", 12f, true).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.14f
+            setTextColor(Color.rgb(192, 221, 255))
+        }, matchWidth())
+        summary.addView(space(displayContext, 12))
+        summary.addView(text(displayContext, money(amount), 42f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        }, matchWidth())
+        summary.addView(space(displayContext, 20))
+        summary.addView(text(displayContext, "Please scan the QR code on this screen.", 15f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        }, matchWidth())
+        summary.addView(space(displayContext, 8))
+        summary.addView(text(displayContext, "StorePOS will confirm the payment automatically.", 12.5f, false).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(215, 231, 249))
+        }, matchWidth())
+
+        body.addView(summary, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.75f))
+        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        return root
+    }
+
+    private fun buildCompletedContent(
+        displayContext: Context,
+        shopName: String,
+        sale: Sale,
+        receiptUrl: String?
+    ): View {
+        val root = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(displayContext, 28), dp(displayContext, 24), dp(displayContext, 28), dp(displayContext, 24))
+            background = gradient(
+                intArrayOf(
+                    Color.rgb(7, 18, 34),
+                    Color.rgb(10, 47, 83),
+                    Color.rgb(13, 91, 151)
+                ),
+                radius = 0f
+            )
+        }
+
+        val header = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(text(displayContext, "STOREPOS", 13f, true).apply {
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
+            background = rounded(Color.rgb(20, 118, 255), 999f)
+        })
+        header.addView(text(displayContext, shopName, 24f, true).apply {
+            setTextColor(Color.WHITE)
+            setPadding(dp(displayContext, 14), 0, 0, 0)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(text(displayContext, "✓  PAYMENT COMPLETE", 11f, true).apply {
+            setTextColor(Color.rgb(84, 230, 161))
+        })
+        root.addView(header, matchWidth())
+        root.addView(space(displayContext, 18))
+
+        val body = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+
+        val summary = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(displayContext, 28), dp(displayContext, 28), dp(displayContext, 28), dp(displayContext, 28))
+            background = rounded(Color.rgb(249, 252, 255), 26f)
+        }
+        summary.addView(text(displayContext, "Thank you!", 34f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(19, 34, 55))
+        }, matchWidth())
+        summary.addView(space(displayContext, 12))
+        summary.addView(text(displayContext, "Total paid", 13f, false).apply {
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(103, 119, 139))
         }, matchWidth())
-        card.addView(text(displayContext, money(sale.totalAmount), 38f, true).apply {
+        summary.addView(text(displayContext, money(sale.totalAmount), 40f, true).apply {
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(15, 84, 163))
         }, matchWidth())
 
         val change = sale.changeDue ?: 0.0
         if (change > 0.009) {
-            card.addView(space(displayContext, 18))
-            card.addView(View(displayContext).apply {
-                setBackgroundColor(Color.rgb(226, 234, 243))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(displayContext, 1)))
-            card.addView(space(displayContext, 18))
-            card.addView(text(displayContext, "CHANGE DUE", 12f, true).apply {
+            summary.addView(space(displayContext, 16))
+            summary.addView(text(displayContext, "CHANGE DUE", 12f, true).apply {
                 gravity = Gravity.CENTER
                 letterSpacing = 0.12f
                 setTextColor(Color.rgb(103, 119, 139))
             }, matchWidth())
-            card.addView(text(displayContext, money(change), 34f, true).apply {
+            summary.addView(text(displayContext, money(change), 32f, true).apply {
                 gravity = Gravity.CENTER
                 setTextColor(Color.rgb(10, 125, 90))
             }, matchWidth())
         }
 
-        card.addView(space(displayContext, 22))
-        card.addView(text(displayContext, "Receipt " + sale.saleNumber, 12f, false).apply {
+        summary.addView(space(displayContext, 18))
+        summary.addView(text(displayContext, "Receipt " + sale.saleNumber, 12f, false).apply {
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(103, 119, 139))
         }, matchWidth())
 
-        root.addView(
-            card,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+        if (!receiptUrl.isNullOrBlank()) {
+            body.addView(
+                summary,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginEnd = dp(displayContext, 16)
+                }
             )
-        )
 
-        root.addView(space(displayContext, 26))
-        root.addView(text(displayContext, "Please collect your receipt and change before leaving.", 13f, false).apply {
+            val receiptCard = LinearLayout(displayContext).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(displayContext, 22), dp(displayContext, 20), dp(displayContext, 22), dp(displayContext, 20))
+                background = rounded(Color.WHITE, 26f)
+            }
+            receiptCard.addView(text(displayContext, "Digital receipt", 22f, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(19, 34, 55))
+            }, matchWidth())
+            receiptCard.addView(space(displayContext, 8))
+            receiptCard.addView(text(displayContext, "Scan this QR code to open your receipt.", 12.5f, false).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(103, 119, 139))
+            }, matchWidth())
+            receiptCard.addView(space(displayContext, 12))
+
+            val receiptQr = makeQrBitmap(receiptUrl, 720)
+            receiptCard.addView(ImageView(displayContext).apply {
+                setImageBitmap(receiptQr)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                adjustViewBounds = true
+            }, LinearLayout.LayoutParams(dp(displayContext, 210), dp(displayContext, 210)))
+
+            receiptCard.addView(space(displayContext, 8))
+            receiptCard.addView(text(displayContext, "Available for 3 days", 11.5f, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(18, 99, 214))
+            }, matchWidth())
+
+            body.addView(receiptCard, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.82f))
+        } else {
+            body.addView(summary, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+
+        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(space(displayContext, 10))
+        root.addView(text(displayContext, "Please collect your receipt and change before leaving.", 12.5f, false).apply {
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(200, 220, 239))
         }, matchWidth())
-
         return root
     }
 
@@ -541,6 +693,26 @@ class CustomerDisplayController(private val context: Context) {
         card.addView(thankYou, matchWidth())
 
         return card
+    }
+
+    private fun decodeBase64Bitmap(value: String?): Bitmap? {
+        val encoded = value?.substringAfter("base64,", value)?.trim().orEmpty()
+        if (encoded.isBlank()) return null
+        return runCatching {
+            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }.getOrNull()
+    }
+
+    private fun makeQrBitmap(value: String, size: Int): Bitmap {
+        val matrix = MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
+        return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+            for (y in 0 until size) {
+                for (x in 0 until size) {
+                    setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
+                }
+            }
+        }
     }
 
     private fun text(
