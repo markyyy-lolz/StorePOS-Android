@@ -36,6 +36,11 @@ object AdminRepository {
         }
     }
 
+    suspend fun schemaHealth(): kotlinx.serialization.json.JsonObject =
+        client.postgrest.rpc(
+            function = "storepos_schema_health"
+        ).decodeAs()
+
     suspend fun auditLogs(shopId: String): List<AuditLog> =
         client.from("audit_logs").select {
             filter { eq("shop_id", shopId) }
