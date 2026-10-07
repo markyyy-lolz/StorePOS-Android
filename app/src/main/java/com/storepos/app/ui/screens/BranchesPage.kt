@@ -20,12 +20,20 @@ import com.storepos.app.ui.components.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+
+private data class BranchSnapshot(
+    val todaySales: Double,
+    val lowStockCount: Int,
+    val inventoryValue: Double
+)
 
 @Composable
 fun BranchesPage(context: ShopContext) {
     var branches by remember { mutableStateOf<List<AccessibleBranch>>(emptyList()) }
     var transfers by remember { mutableStateOf<List<StockTransfer>>(emptyList()) }
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var snapshots by remember { mutableStateOf<Map<String, BranchSnapshot>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var create by remember { mutableStateOf(false) }
@@ -38,6 +46,30 @@ fun BranchesPage(context: ShopContext) {
         branches=b.await()
         transfers=t.await().filter { it.fromShopId==context.shop.id || it.toShopId==context.shop.id }
         products=p.await()
+
+        val today = LocalDate.now().toString()
+        snapshots = branches.associate { branch ->
+            val snapshot = runCatching {
+                coroutineScope {
+                    val salesDeferred = async { StoreRepository.sales(branch.shop.id) }
+                    val productsDeferred = async { StoreRepository.products(branch.shop.id) }
+                    val branchSales = salesDeferred.await()
+                    val branchProducts = productsDeferred.await()
+                    BranchSnapshot(
+                        todaySales = branchSales
+                            .filter { it.status == "completed" && it.createdAt.orEmpty().startsWith(today) }
+                            .sumOf { it.totalAmount },
+                        lowStockCount = branchProducts.count {
+                            it.isActive && it.trackStock && it.stockQuantity <= it.reorderLevel
+                        },
+                        inventoryValue = branchProducts
+                            .filter { it.isActive && it.trackStock }
+                            .sumOf { it.costPrice * it.stockQuantity.coerceAtLeast(0.0) }
+                    )
+                }
+            }.getOrElse { BranchSnapshot(0.0, 0, 0.0) }
+            branch.shop.id to snapshot
+        }
     }
 
     LaunchedEffect(context.shop.id) {
@@ -56,6 +88,28 @@ fun BranchesPage(context: ShopContext) {
             })
         }
         error?.let { item { Text(it,color=MaterialTheme.colorScheme.error) } }
+        item {
+            val totalSales = snapshots.values.sumOf { it.todaySales }
+            val totalValue = snapshots.values.sumOf { it.inventoryValue }
+            val totalLow = snapshots.values.sumOf { it.lowStockCount }
+            MotoCard(Modifier.fillMaxWidth()) {
+                Text("Multi-branch overview", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Today", style = MaterialTheme.typography.labelMedium)
+                        Text(money(totalSales), fontWeight = FontWeight.Black)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("Inventory value", style = MaterialTheme.typography.labelMedium)
+                        Text(money(totalValue), fontWeight = FontWeight.Black)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("Low stock", style = MaterialTheme.typography.labelMedium)
+                        Text(totalLow.toString(), fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        }
         item { Text("Accessible branches",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold) }
         items(branches,key={it.shop.id}) { b ->
             MotoCard(Modifier.fillMaxWidth()) {
@@ -63,6 +117,15 @@ fun BranchesPage(context: ShopContext) {
                     Column(Modifier.weight(1f)) {
                         Text(b.shop.name,fontWeight=FontWeight.Bold)
                         Text(b.shop.address?:"No address",color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        snapshots[b.shop.id]?.let { snapshot ->
+                            Text(
+                                "Today " + money(snapshot.todaySales) +
+                                    " • Low stock " + snapshot.lowStockCount +
+                                    " • Value " + money(snapshot.inventoryValue),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     StatusPill(b.member.role)
                 }

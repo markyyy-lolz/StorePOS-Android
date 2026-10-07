@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.storepos.app.BuildConfig
+import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.AppVersion
 import com.storepos.app.data.model.DeviceSession
@@ -23,6 +24,8 @@ import com.storepos.app.data.model.ShopContext
 import com.storepos.app.data.model.ShopMember
 import com.storepos.app.data.model.ShopSettings
 import com.storepos.app.data.model.UserProfile
+import com.storepos.app.data.model.MemberPermissionOverride
+import com.storepos.app.notifications.StorePosAlertWorker
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.launch
 
@@ -36,14 +39,21 @@ fun SettingsPage(context: ShopContext) {
     var trainingMode by remember(context.shop.id) {
         mutableStateOf(prefs.getBoolean("training_mode_" + context.shop.id, false))
     }
+    var backgroundAlerts by remember {
+        mutableStateOf(prefs.getBoolean("background_alerts_enabled", true))
+    }
     var devices by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
     var members by remember { mutableStateOf<List<ShopMember>>(emptyList()) }
     var profiles by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
+    var permissionMember by remember { mutableStateOf<ShopMember?>(null) }
+    var permissionRows by remember { mutableStateOf<List<MemberPermissionOverride>>(emptyList()) }
+    var permissionLoading by remember { mutableStateOf(false) }
     var adminLoading by remember { mutableStateOf(false) }
     var latest by remember { mutableStateOf<AppVersion?>(null) }
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var posSettingsOpen by remember { mutableStateOf(false) }
     var receiptDesignerOpen by remember { mutableStateOf(false) }
+    var customerDisplaySettingsOpen by remember { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -95,6 +105,29 @@ fun SettingsPage(context: ShopContext) {
                     Text("Supabase Cloud", fontWeight = FontWeight.Bold)
                     Text("Connected • secure RLS • realtime-ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+        }
+
+        MotoCard(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Icon(Icons.Rounded.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Background Store Alerts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Check critical and warning alerts every 30 minutes when internet is available.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = backgroundAlerts,
+                    onCheckedChange = { enabled ->
+                        backgroundAlerts = enabled
+                        prefs.edit().putBoolean("background_alerts_enabled", enabled).apply()
+                        if (enabled) StorePosAlertWorker.schedule(androidContext)
+                        else StorePosAlertWorker.cancel(androidContext)
+                    }
+                )
             }
         }
 
@@ -173,6 +206,21 @@ fun SettingsPage(context: ShopContext) {
                                     }.onFailure {
                                         error = StoreRepository.userMessage(it)
                                     }
+                                }
+                            },
+                            onPermissions = {
+                                permissionMember = member
+                                permissionLoading = true
+                                scope.launch {
+                                    error = null
+                                    runCatching {
+                                        AdminRepository.memberPermissions(member.id)
+                                    }.onSuccess {
+                                        permissionRows = it
+                                    }.onFailure {
+                                        error = StoreRepository.userMessage(it)
+                                    }
+                                    permissionLoading = false
                                 }
                             }
                         )
@@ -283,6 +331,32 @@ fun SettingsPage(context: ShopContext) {
         }
 
         PrinterSettingsCard(context)
+
+        MotoCard(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Icon(Icons.Rounded.ScreenshotMonitor, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Customer Display", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Configure the external HDMI / presentation screen used for live customer checkout.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Text(
+                listOf(
+                    if (prefs.getBoolean("customer_display_auto", false)) "Auto-start on" else "Manual start",
+                    if (prefs.getBoolean("customer_display_show_brand", true)) "StorePOS branding on" else "StorePOS branding off"
+                ).joinToString(" • "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = { customerDisplaySettingsOpen = true }) {
+                Text("Configure customer display")
+            }
+        }
+
         MotoCard(Modifier.fillMaxWidth()) {
             Text("Cloud backup & billing", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
@@ -362,6 +436,45 @@ fun SettingsPage(context: ShopContext) {
                 checking = false
             }
         }
+    permissionMember?.let { member ->
+        StaffAccessDialog(
+            member = member,
+            profile = profiles.firstOrNull { it.id == member.userId },
+            overrides = permissionRows,
+            loading = permissionLoading,
+            onDismiss = {
+                permissionMember = null
+                permissionRows = emptyList()
+            },
+            onToggle = { key, allowed ->
+                scope.launch {
+                    permissionLoading = true
+                    error = null
+                    runCatching {
+                        AdminRepository.setMemberPermission(
+                            context.shop.id,
+                            member.id,
+                            key,
+                            allowed
+                        )
+                    }.onSuccess {
+                        permissionRows = AdminRepository.memberPermissions(member.id)
+                    }.onFailure {
+                        error = StoreRepository.userMessage(it)
+                    }
+                    permissionLoading = false
+                }
+            }
+        )
+    }
+
+    if (customerDisplaySettingsOpen) {
+        CustomerDisplaySettingsDialog(
+            prefs = prefs,
+            onDismiss = { customerDisplaySettingsOpen = false }
+        )
+    }
+
     if (receiptDesignerOpen) {
         val previewPaperWidth = prefs.getInt("paper_width", posSettings.printerPaperWidthMm)
         ReceiptDesignerDialog(
@@ -416,7 +529,8 @@ private fun StaffPermissionRow(
     profile: UserProfile?,
     currentUserId: String,
     currentRole: String,
-    onChange: (String, Boolean) -> Unit
+    onChange: (String, Boolean) -> Unit,
+    onPermissions: () -> Unit
 ) {
     var menuOpen by remember(member.id) { mutableStateOf(false) }
     val role = member.role.lowercase()
@@ -451,6 +565,12 @@ private fun StaffPermissionRow(
                 }
             }
             Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = onPermissions, enabled = canEdit) {
+                Icon(Icons.Rounded.Tune, null)
+                Spacer(Modifier.width(4.dp))
+                Text("Access")
+            }
+            Spacer(Modifier.width(8.dp))
             Switch(
                 checked = member.isActive,
                 onCheckedChange = { onChange(role, it) },
@@ -459,6 +579,97 @@ private fun StaffPermissionRow(
         }
         HorizontalDivider()
     }
+}
+
+private data class StaffPermissionDefinition(
+    val key: String,
+    val label: String,
+    val description: String
+)
+
+private val staffPermissionDefinitions = listOf(
+    StaffPermissionDefinition("pos", "Point of Sale", "Open the production register and checkout."),
+    StaffPermissionDefinition("inventory", "Inventory", "Products, stock adjustments, stocktake and labels."),
+    StaffPermissionDefinition("retail_ops", "Retail Operations", "Returns, drawer, controls, promos and retail tools."),
+    StaffPermissionDefinition("customers", "Customers", "Customer profiles, loyalty and store credit."),
+    StaffPermissionDefinition("service", "Service", "Service jobs and workshop workflow."),
+    StaffPermissionDefinition("quotations", "Quotations", "Create and manage quotations."),
+    StaffPermissionDefinition("suppliers", "Suppliers", "Suppliers, purchase orders and payables."),
+    StaffPermissionDefinition("branches", "Branches", "Multi-branch overview and stock transfers."),
+    StaffPermissionDefinition("reports", "Reports", "Financial and product reports."),
+    StaffPermissionDefinition("admin_center", "Admin Center", "Audit trail, sync recovery, diagnostics and backup."),
+    StaffPermissionDefinition("alerts", "Alerts", "Operational and cloud attention center."),
+    StaffPermissionDefinition("support", "Support", "Human StorePOS support threads."),
+    StaffPermissionDefinition("settings", "Settings", "Device, printer and StorePOS configuration.")
+)
+
+@Composable
+private fun StaffAccessDialog(
+    member: ShopMember,
+    profile: UserProfile?,
+    overrides: List<MemberPermissionOverride>,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onToggle: (String, Boolean) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!loading) onDismiss() },
+        title = {
+            Text(
+                "Access • " + (profile?.displayName ?: member.role.uppercase()),
+                fontWeight = FontWeight.Black
+            )
+        },
+        text = {
+            Column(
+                Modifier.heightIn(max = 600.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "These switches can further restrict the staff member's role. They never grant access beyond the selected role or the shop license.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (loading && overrides.isEmpty()) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                androidx.compose.foundation.lazy.LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    items(staffPermissionDefinitions.size) { index ->
+                        val def = staffPermissionDefinitions[index]
+                        val allowed = overrides.firstOrNull { it.permissionKey == def.key }?.allowed != false
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            tonalElevation = 1.dp
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(10.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(def.label, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        def.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = allowed,
+                                    onCheckedChange = { onToggle(def.key, it) },
+                                    enabled = !loading
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss, enabled = !loading) { Text("Done") }
+        }
+    )
 }
 
 private fun rolePermissionSummary(role: String): String = when (role.lowercase()) {
@@ -503,6 +714,68 @@ private fun DeviceSessionRow(
             Text(if (session.isActive) "Revoke" else "Reactivate")
         }
     }
+}
+
+@Composable
+private fun CustomerDisplaySettingsDialog(
+    prefs: android.content.SharedPreferences,
+    onDismiss: () -> Unit
+) {
+    var autoStart by remember {
+        mutableStateOf(prefs.getBoolean("customer_display_auto", false))
+    }
+    var showBrand by remember {
+        mutableStateOf(prefs.getBoolean("customer_display_show_brand", true))
+    }
+    var idleMessage by remember {
+        mutableStateOf(
+            prefs.getString("customer_display_idle_message", "Ready for your order")
+                ?: "Ready for your order"
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Customer Display Settings", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingSwitchRow("Auto-start when a second display is connected", autoStart) {
+                    autoStart = it
+                }
+                SettingSwitchRow("Show StorePOS branding", showBrand) {
+                    showBrand = it
+                }
+                OutlinedTextField(
+                    value = idleMessage,
+                    onValueChange = { idleMessage = it.take(80) },
+                    label = { Text("Idle message") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Text(
+                    "The POS still has a Customer display button for manual on/off control.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                prefs.edit()
+                    .putBoolean("customer_display_auto", autoStart)
+                    .putBoolean("customer_display_show_brand", showBrand)
+                    .putString(
+                        "customer_display_idle_message",
+                        idleMessage.trim().ifBlank { "Ready for your order" }
+                    )
+                    .apply()
+                onDismiss()
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable

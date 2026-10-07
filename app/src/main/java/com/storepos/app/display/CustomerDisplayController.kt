@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.storepos.app.data.model.CartLine
+import com.storepos.app.data.model.Sale
 import java.util.Locale
 
 class CustomerDisplayController(private val context: Context) {
@@ -26,7 +27,7 @@ class CustomerDisplayController(private val context: Context) {
     fun hasExternalDisplay(): Boolean =
         displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).isNotEmpty()
 
-    fun show(shopName: String, cart: List<CartLine>): Boolean {
+    fun show(shopName: String, cart: List<CartLine>, completedSale: Sale? = null): Boolean {
         val display = displayManager
             .getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
             .firstOrNull() ?: run {
@@ -45,7 +46,10 @@ class CustomerDisplayController(private val context: Context) {
         // IMPORTANT: build the UI with the Presentation context so dp/sp scaling
         // follows the second display instead of the cashier display.
         val displayContext = presentation?.context ?: context
-        presentation?.setContentView(buildContent(displayContext, shopName, cart))
+        presentation?.setContentView(
+            if (completedSale != null) buildCompletedContent(displayContext, shopName, completedSale)
+            else buildContent(displayContext, shopName, cart)
+        )
         return true
     }
 
@@ -53,6 +57,124 @@ class CustomerDisplayController(private val context: Context) {
         runCatching { presentation?.dismiss() }
         presentation = null
         activeDisplayId = null
+    }
+
+    private fun buildCompletedContent(
+        displayContext: Context,
+        shopName: String,
+        sale: Sale
+    ): View {
+        val root = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(
+                dp(displayContext, 42),
+                dp(displayContext, 34),
+                dp(displayContext, 42),
+                dp(displayContext, 34)
+            )
+            background = gradient(
+                intArrayOf(
+                    Color.rgb(7, 18, 34),
+                    Color.rgb(10, 47, 83),
+                    Color.rgb(13, 91, 151)
+                ),
+                radius = 0f
+            )
+        }
+
+        val prefs = context.getSharedPreferences("motopos_settings", 0)
+        val showBrand = prefs.getBoolean("customer_display_show_brand", true)
+
+        if (showBrand) {
+            root.addView(text(displayContext, "STOREPOS", 13f, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(117, 190, 255))
+                letterSpacing = 0.12f
+            }, matchWidth())
+            root.addView(space(displayContext, 10))
+        }
+
+        root.addView(text(displayContext, shopName, 24f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        }, matchWidth())
+
+        root.addView(space(displayContext, 36))
+
+        val card = LinearLayout(displayContext).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(
+                dp(displayContext, 34),
+                dp(displayContext, 30),
+                dp(displayContext, 34),
+                dp(displayContext, 30)
+            )
+            background = rounded(Color.rgb(249, 252, 255), 28f)
+        }
+
+        card.addView(text(displayContext, "PAYMENT COMPLETE", 12f, true).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.15f
+            setTextColor(Color.rgb(18, 99, 214))
+        }, matchWidth())
+
+        card.addView(space(displayContext, 12))
+        card.addView(text(displayContext, "Thank you!", 34f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(19, 34, 55))
+        }, matchWidth())
+
+        card.addView(space(displayContext, 18))
+        card.addView(text(displayContext, "Total paid", 13f, false).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(103, 119, 139))
+        }, matchWidth())
+        card.addView(text(displayContext, money(sale.totalAmount), 38f, true).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(15, 84, 163))
+        }, matchWidth())
+
+        val change = sale.changeDue ?: 0.0
+        if (change > 0.009) {
+            card.addView(space(displayContext, 18))
+            card.addView(View(displayContext).apply {
+                setBackgroundColor(Color.rgb(226, 234, 243))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(displayContext, 1)))
+            card.addView(space(displayContext, 18))
+            card.addView(text(displayContext, "CHANGE DUE", 12f, true).apply {
+                gravity = Gravity.CENTER
+                letterSpacing = 0.12f
+                setTextColor(Color.rgb(103, 119, 139))
+            }, matchWidth())
+            card.addView(text(displayContext, money(change), 34f, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(10, 125, 90))
+            }, matchWidth())
+        }
+
+        card.addView(space(displayContext, 22))
+        card.addView(text(displayContext, "Receipt " + sale.saleNumber, 12f, false).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(103, 119, 139))
+        }, matchWidth())
+
+        root.addView(
+            card,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        root.addView(space(displayContext, 26))
+        root.addView(text(displayContext, "Please collect your receipt and change before leaving.", 13f, false).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(200, 220, 239))
+        }, matchWidth())
+
+        return root
     }
 
     private fun buildContent(
@@ -63,6 +185,12 @@ class CustomerDisplayController(private val context: Context) {
         val metrics = displayContext.resources.displayMetrics
         val widthDp = metrics.widthPixels / metrics.density
         val wide = widthDp >= 720f
+        val prefs = context.getSharedPreferences("motopos_settings", 0)
+        val showBrand = prefs.getBoolean("customer_display_show_brand", true)
+        val idleMessage = prefs.getString(
+            "customer_display_idle_message",
+            "Ready for your order"
+        )?.trim().orEmpty().ifBlank { "Ready for your order" }
         val itemCount = cart.sumOf { it.quantity }
         val total = cart.sumOf { it.lineTotal }
 
@@ -85,13 +213,15 @@ class CustomerDisplayController(private val context: Context) {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val brand = text(displayContext, "STOREPOS", 13f, true).apply {
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
-            background = rounded(Color.rgb(20, 118, 255), 999f)
+        if (showBrand) {
+            val brand = text(displayContext, "STOREPOS", 13f, true).apply {
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(dp(displayContext, 12), dp(displayContext, 7), dp(displayContext, 12), dp(displayContext, 7))
+                background = rounded(Color.rgb(20, 118, 255), 999f)
+            }
+            header.addView(brand)
         }
-        header.addView(brand)
 
         val titleWrap = LinearLayout(displayContext).apply {
             orientation = LinearLayout.VERTICAL
@@ -125,7 +255,7 @@ class CustomerDisplayController(private val context: Context) {
             gravity = Gravity.TOP
         }
 
-        val orderCard = buildOrderCard(displayContext, cart, itemCount, wide)
+        val orderCard = buildOrderCard(displayContext, cart, itemCount, wide, idleMessage)
         val summaryCard = buildSummaryCard(displayContext, cart.isEmpty(), itemCount, total, wide)
 
         if (wide) {
@@ -182,7 +312,8 @@ class CustomerDisplayController(private val context: Context) {
         context: Context,
         cart: List<CartLine>,
         itemCount: Double,
-        wide: Boolean
+        wide: Boolean,
+        idleMessage: String
     ): View {
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -224,7 +355,7 @@ class CustomerDisplayController(private val context: Context) {
             }, matchWidth())
 
             empty.addView(space(context, 10))
-            empty.addView(text(context, "Ready for your order", if (wide) 30f else 24f, true).apply {
+            empty.addView(text(context, idleMessage, if (wide) 30f else 24f, true).apply {
                 gravity = Gravity.CENTER
                 setTextColor(Color.rgb(20, 35, 57))
             }, matchWidth())

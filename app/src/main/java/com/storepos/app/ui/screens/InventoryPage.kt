@@ -13,6 +13,7 @@ import androidx.compose.material.icons.rounded.SyncAlt
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.FactCheck
 import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -20,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -31,6 +33,7 @@ import com.storepos.app.data.model.ProductCategoryInsert
 import com.storepos.app.data.model.ShopContext
 import com.storepos.app.data.model.InventoryCount
 import com.storepos.app.data.model.InventoryCountItem
+import com.storepos.app.printing.ProductLabelPrinter
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.launch
 import com.journeyapps.barcodescanner.ScanContract
@@ -44,6 +47,7 @@ fun InventoryPage(context: ShopContext) {
     var loading by remember { mutableStateOf(true) }
     var addOpen by remember { mutableStateOf(false) }
     var categoryManagerOpen by remember { mutableStateOf(false) }
+    var labelCenterOpen by remember { mutableStateOf(false) }
     var editProduct by remember { mutableStateOf<Product?>(null) }
     var stockProduct by remember { mutableStateOf<Product?>(null) }
     var counts by remember { mutableStateOf<List<InventoryCount>>(emptyList()) }
@@ -108,6 +112,14 @@ fun InventoryPage(context: ShopContext) {
                         Icon(Icons.Rounded.Category, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Categories")
+                    }
+                    OutlinedButton(
+                        onClick = { labelCenterOpen = true },
+                        enabled = products.isNotEmpty()
+                    ) {
+                        Icon(Icons.Rounded.Print, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Labels")
                     }
                     OutlinedButton(
                         onClick = {
@@ -247,6 +259,13 @@ fun InventoryPage(context: ShopContext) {
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
             }
+        )
+    }
+
+    if (labelCenterOpen) {
+        ProductLabelCenterDialog(
+            products = products.filter { it.isActive },
+            onDismiss = { labelCenterOpen = false }
         )
     }
 
@@ -563,6 +582,129 @@ private fun EditProductDialog(
             ) { Text("Save changes") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun ProductLabelCenterDialog(
+    products: List<Product>,
+    onDismiss: () -> Unit
+) {
+    val androidContext = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var selected by remember { mutableStateOf(products.firstOrNull()) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var copies by remember { mutableStateOf("1") }
+    var printing by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val count = copies.toIntOrNull()
+
+    AlertDialog(
+        onDismissRequest = { if (!printing) onDismiss() },
+        title = { Text("Barcode & shelf labels", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Print product name, selling price, barcode/SKU and shelf location using the configured ESC/POS printer.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Box {
+                    OutlinedButton(
+                        onClick = { menuOpen = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(selected?.let { it.name + " • " + it.sku } ?: "Select product")
+                    }
+                    DropdownMenu(menuOpen, { menuOpen = false }) {
+                        products.forEach { product ->
+                            DropdownMenuItem(
+                                text = { Text(product.name + " • " + money(product.sellingPrice)) },
+                                onClick = {
+                                    selected = product
+                                    menuOpen = false
+                                    message = null
+                                }
+                            )
+                        }
+                    }
+                }
+
+                selected?.let { product ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        tonalElevation = 2.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(product.name, fontWeight = FontWeight.Bold)
+                            Text(
+                                money(product.sellingPrice),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                product.barcode?.takeIf { it.isNotBlank() } ?: product.sku,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            product.shelfLocation?.takeIf { it.isNotBlank() }?.let {
+                                Text("Shelf: " + it, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = copies,
+                    onValueChange = { copies = it.filter(Char::isDigit).take(3) },
+                    label = { Text("Number of labels") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                message?.let {
+                    Text(
+                        it,
+                        color = if (it.startsWith("Printed")) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val product = selected ?: return@Button
+                    val labelCount = count ?: return@Button
+                    printing = true
+                    message = null
+                    scope.launch {
+                        val result = ProductLabelPrinter.printConfigured(
+                            androidContext,
+                            product,
+                            labelCount
+                        )
+                        message = result.fold(
+                            onSuccess = { "Printed " + labelCount + " label(s)." },
+                            onFailure = { StoreRepository.userMessage(it) }
+                        )
+                        printing = false
+                    }
+                },
+                enabled = selected != null && count != null && count in 1..100 && !printing
+            ) {
+                Icon(Icons.Rounded.Print, null)
+                Spacer(Modifier.width(6.dp))
+                Text(if (printing) "Printing…" else "Print labels")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !printing) { Text("Close") }
+        }
     )
 }
 

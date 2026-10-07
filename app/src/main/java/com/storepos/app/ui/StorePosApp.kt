@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import android.os.Build
 import android.provider.Settings
 import com.storepos.app.BuildConfig
+import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.LicenseAccess
 import com.storepos.app.data.model.PlanEntitlements
@@ -42,6 +43,7 @@ enum class AppPage(val label: String, val icon: ImageVector) {
     Operations("Operations", Icons.Rounded.Handyman),
     Branches("Branches", Icons.Rounded.Storefront),
     Reports("Reports", Icons.Rounded.Analytics),
+    AdminCenter("Admin Center", Icons.Rounded.AdminPanelSettings),
     Alerts("Alerts", Icons.Rounded.NotificationsActive),
     Support("Support", Icons.Rounded.SupportAgent),
     Settings("Settings", Icons.Rounded.Settings)
@@ -306,8 +308,25 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
     else -> listOf(AppPage.Dashboard, AppPage.Alerts, AppPage.Support, AppPage.Settings)
 }
 
+private fun permissionKeyForPage(page: AppPage): String? = when (page) {
+    AppPage.POS -> "pos"
+    AppPage.Inventory -> "inventory"
+    AppPage.RetailOps -> "retail_ops"
+    AppPage.Customers -> "customers"
+    AppPage.Service -> "service"
+    AppPage.Quotations -> "quotations"
+    AppPage.Suppliers -> "suppliers"
+    AppPage.Branches -> "branches"
+    AppPage.Reports -> "reports"
+    AppPage.AdminCenter -> "admin_center"
+    AppPage.Alerts -> "alerts"
+    AppPage.Support -> "support"
+    AppPage.Settings -> "settings"
+    else -> null
+}
+
 private fun pageAllowedByPlan(page: AppPage, entitlements: PlanEntitlements): Boolean {
-    if (page in listOf(AppPage.Dashboard, AppPage.Alerts, AppPage.Support, AppPage.Settings)) return true
+    if (page in listOf(AppPage.Dashboard, AppPage.AdminCenter, AppPage.Alerts, AppPage.Support, AppPage.Settings)) return true
     if (!entitlements.valid) return false
     val features = entitlements.features.toSet()
     return when (page) {
@@ -334,13 +353,32 @@ private fun MainShell(
     entitlements: PlanEntitlements,
     onSignOut: () -> Unit
 ) {
+    var permissionOverrides by remember(shopContext.member.id) {
+        mutableStateOf<Map<String, Boolean>>(emptyMap())
+    }
+
+    LaunchedEffect(shopContext.member.id) {
+        permissionOverrides = if (shopContext.member.role.equals("owner", true)) {
+            emptyMap()
+        } else {
+            runCatching {
+                AdminRepository.memberPermissions(shopContext.member.id)
+                    .associate { it.permissionKey to it.allowed }
+            }.getOrDefault(emptyMap())
+        }
+    }
+
     val availablePages = remember(
         shopContext.member.role,
         entitlements.valid,
-        entitlements.features
+        entitlements.features,
+        permissionOverrides
     ) {
         pagesForRole(shopContext.member.role).filter { page ->
-            pageAllowedByPlan(page, entitlements)
+            val roleAndPlanAllow = pageAllowedByPlan(page, entitlements)
+            val key = permissionKeyForPage(page)
+            val permissionAllows = key == null || permissionOverrides[key] != false
+            roleAndPlanAllow && permissionAllows
         }
     }
     var page by remember(shopContext.shop.id) { mutableStateOf(AppPage.Dashboard) }
@@ -625,6 +663,7 @@ private fun PageContent(
                 AppPage.Operations -> com.storepos.app.ui.screens.OperationsPage(context)
                 AppPage.Branches -> com.storepos.app.ui.screens.BranchesPage(context)
                 AppPage.Reports -> com.storepos.app.ui.screens.ReportsPage(context)
+                AppPage.AdminCenter -> com.storepos.app.ui.screens.AdminCenterPage(context)
                 AppPage.Alerts -> com.storepos.app.ui.screens.AlertsPage(
                     context = context,
                     onNavigate = { target ->
