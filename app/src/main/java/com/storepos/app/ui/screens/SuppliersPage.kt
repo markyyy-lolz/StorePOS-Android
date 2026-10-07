@@ -3,6 +3,7 @@ package com.storepos.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -10,7 +11,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -23,7 +26,10 @@ fun SuppliersPage(context: ShopContext) {
     var suppliers by remember { mutableStateOf<List<Supplier>>(emptyList()) }
     var orders by remember { mutableStateOf<List<PurchaseOrder>>(emptyList()) }
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var payables by remember { mutableStateOf<List<SupplierPayable>>(emptyList()) }
+    var payments by remember { mutableStateOf<List<SupplierPayment>>(emptyList()) }
     var poOpen by remember { mutableStateOf(false) }
+    var paymentOpen by remember { mutableStateOf<SupplierPayable?>(null) }
     var loading by remember { mutableStateOf(true) }
     var addOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -33,9 +39,13 @@ fun SuppliersPage(context: ShopContext) {
         val s = async { StoreRepository.suppliers(context.shop.id) }
         val o = async { StoreRepository.purchaseOrders(context.shop.id) }
         val p = async { StoreRepository.products(context.shop.id) }
+        val ap = async { runCatching { AdminRepository.supplierPayables(context.shop.id) }.getOrDefault(emptyList()) }
+        val pm = async { runCatching { AdminRepository.supplierPayments(context.shop.id) }.getOrDefault(emptyList()) }
         suppliers = s.await()
         orders = o.await()
         products = p.await()
+        payables = ap.await()
+        payments = pm.await()
     }
 
     LaunchedEffect(context.shop.id) {
@@ -94,6 +104,68 @@ fun SuppliersPage(context: ShopContext) {
                             .ifBlank { "No contact information" },
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+        }
+
+        item {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Supplier payables", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Outstanding " + money(payables.filter { it.status in listOf("open", "partial") }.sumOf { it.balance }),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                StatusPill(payables.count { it.status in listOf("open", "partial") }.toString() + " open")
+            }
+        }
+
+        if (payables.none { it.status in listOf("open", "partial") }) {
+            item {
+                EmptyView(
+                    "No supplier balances",
+                    "Fully received purchase orders automatically create a 30-day payable."
+                )
+            }
+        } else {
+            items(
+                payables.filter { it.status in listOf("open", "partial") },
+                key = { it.id }
+            ) { payable ->
+                val supplier = suppliers.firstOrNull { it.id == payable.supplierId }
+                val po = orders.firstOrNull { it.id == payable.purchaseOrderId }
+                val canPay = context.member.role.lowercase() in setOf("owner", "admin", "manager")
+                MotoCard(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(supplier?.name ?: "Supplier", fontWeight = FontWeight.Bold)
+                            Text(
+                                listOfNotNull(
+                                    po?.poNumber,
+                                    payable.dueDate?.let { "Due " + it }
+                                ).joinToString(" • "),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Original " + money(payable.originalAmount) +
+                                    " • Balance " + money(payable.balance),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            StatusPill(payable.status)
+                            Button(
+                                onClick = { paymentOpen = payable },
+                                enabled = canPay
+                            ) {
+                                Icon(Icons.Rounded.Payments, null)
+                                Spacer(Modifier.width(5.dp))
+                                Text("Pay")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -167,6 +239,31 @@ fun SuppliersPage(context: ShopContext) {
         )
     }
 
+    paymentOpen?.let { payable ->
+        SupplierPaymentDialog(
+            payable = payable,
+            supplierName = suppliers.firstOrNull { it.id == payable.supplierId }?.name ?: "Supplier",
+            onDismiss = { paymentOpen = null },
+            onPay = { amount, method, reference, notes ->
+                scope.launch {
+                    error = null
+                    runCatching {
+                        AdminRepository.paySupplier(
+                            payable.id,
+                            amount,
+                            method,
+                            reference,
+                            notes
+                        )
+                    }.onSuccess {
+                        paymentOpen = null
+                        refresh()
+                    }.onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
     if (addOpen) {
         AddSupplierDialog(
             context,
@@ -183,6 +280,85 @@ fun SuppliersPage(context: ShopContext) {
             }
         )
     }
+}
+
+@Composable
+private fun SupplierPaymentDialog(
+    payable: SupplierPayable,
+    supplierName: String,
+    onDismiss: () -> Unit,
+    onPay: (Double, String, String?, String?) -> Unit
+) {
+    var amount by remember(payable.id) { mutableStateOf(payable.balance.toString()) }
+    var method by remember(payable.id) { mutableStateOf("bank") }
+    var methodMenu by remember(payable.id) { mutableStateOf(false) }
+    var reference by remember(payable.id) { mutableStateOf("") }
+    var notes by remember(payable.id) { mutableStateOf("") }
+    val parsed = amount.toDoubleOrNull()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pay supplier", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text(supplierName, fontWeight = FontWeight.Bold)
+                Text("Outstanding balance: " + money(payable.balance))
+                OutlinedTextField(
+                    amount,
+                    { amount = it },
+                    label = { Text("Payment amount") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Box {
+                    OutlinedButton(
+                        onClick = { methodMenu = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Method: " + method.uppercase()) }
+                    DropdownMenu(methodMenu, { methodMenu = false }) {
+                        listOf("cash", "bank", "gcash", "maya", "card", "cheque", "other").forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.replaceFirstChar { it.uppercase() }) },
+                                onClick = {
+                                    method = option
+                                    methodMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    reference,
+                    { reference = it },
+                    label = { Text("Reference / cheque no. (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    notes,
+                    { notes = it },
+                    label = { Text("Notes (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onPay(
+                        parsed ?: 0.0,
+                        method,
+                        reference.trim().ifBlank { null },
+                        notes.trim().ifBlank { null }
+                    )
+                },
+                enabled = parsed != null && parsed > 0 && parsed <= payable.balance + 0.009
+            ) { Text("Post payment") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
