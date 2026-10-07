@@ -2,6 +2,10 @@ package com.storepos.app.ui.screens
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.VibrationEffect
+import android.os.Vibrator
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -97,6 +101,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var quantityProduct by remember { mutableStateOf<Product?>(null) }
     var priceProduct by remember { mutableStateOf<Product?>(null) }
     var cartEditorOpen by remember { mutableStateOf(false) }
+    var unknownBarcode by remember { mutableStateOf<String?>(null) }
     var holdOpen by remember { mutableStateOf(false) }
     var recallOpen by remember { mutableStateOf(false) }
     var startShiftOpen by remember { mutableStateOf(false) }
@@ -123,6 +128,18 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     val androidContext = LocalContext.current
     val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
     val offlineStore = remember { OfflineStore(androidContext) }
+    val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
+    val vibrator = remember { androidContext.getSystemService(Vibrator::class.java) }
+    DisposableEffect(Unit) {
+        onDispose { scanTone.release() }
+    }
+
+    fun scanSuccessFeedback() {
+        scanTone.startTone(ToneGenerator.TONE_PROP_BEEP, 70)
+        vibrator?.vibrate(
+            VibrationEffect.createOneShot(35, VibrationEffect.DEFAULT_AMPLITUDE)
+        )
+    }
 
     fun submitScannedCode(rawCode: String) {
         val code = rawCode.trim()
@@ -133,11 +150,14 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         if (product != null) {
             if (product.isWeighed) quantityProduct = product
             else cart = addLine(cart, product)
+            scanSuccessFeedback()
             query = ""
+            unknownBarcode = null
             error = null
         } else {
             query = code
-            error = "Barcode / SKU not found in inventory: " + code
+            unknownBarcode = code
+            error = "Barcode / SKU not found. Create it now or scan another item: " + code
         }
     }
 
@@ -698,6 +718,38 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             onOverride = { product ->
                 cartEditorOpen = false
                 priceProduct = product
+            }
+        )
+    }
+
+    unknownBarcode?.let { code ->
+        QuickCreateScannedProductDialog(
+            code = code,
+            onDismiss = { unknownBarcode = null },
+            onSave = { name, cost, price, openingStock ->
+                scope.launch {
+                    error = null
+                    runCatching {
+                        StoreRepository.addProduct(
+                            ProductInsert(
+                                shopId = context.shop.id,
+                                sku = code,
+                                barcode = code,
+                                name = name,
+                                costPrice = cost,
+                                sellingPrice = price,
+                                stockQuantity = openingStock,
+                                reorderLevel = 5.0
+                            )
+                        )
+                    }.onSuccess { created ->
+                        products = (products + created).distinctBy { it.id }
+                        if (created.isWeighed) quantityProduct = created else cart = addLine(cart, created)
+                        scanSuccessFeedback()
+                        query = ""
+                        unknownBarcode = null
+                    }.onFailure { error = StoreRepository.userMessage(it) }
+                }
             }
         )
     }
@@ -1700,6 +1752,77 @@ private fun CartEditorDialog(
             }
         },
         confirmButton = { Button(onClick = onDismiss) { Text("Done") } }
+    )
+}
+
+@Composable
+private fun QuickCreateScannedProductDialog(
+    code: String,
+    onDismiss: () -> Unit,
+    onSave: (String, Double, Double, Double) -> Unit
+) {
+    var name by remember(code) { mutableStateOf("") }
+    var cost by remember(code) { mutableStateOf("") }
+    var price by remember(code) { mutableStateOf("") }
+    var stock by remember(code) { mutableStateOf("1") }
+    val parsedCost = cost.toDoubleOrNull() ?: 0.0
+    val parsedPrice = price.toDoubleOrNull()
+    val parsedStock = stock.toDoubleOrNull()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unknown barcode", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Barcode / SKU: $code")
+                Text(
+                    "Create this product without leaving the register. It will be added to the cart after saving.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Product name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = cost,
+                        onValueChange = { cost = it },
+                        label = { Text("Cost") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = price,
+                        onValueChange = { price = it },
+                        label = { Text("Selling") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+                OutlinedTextField(
+                    value = stock,
+                    onValueChange = { stock = it },
+                    label = { Text("Opening stock") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(name.trim(), parsedCost, parsedPrice ?: 0.0, parsedStock ?: 0.0) },
+                enabled = name.isNotBlank() && parsedPrice != null && parsedPrice >= 0.0 &&
+                    parsedStock != null && parsedStock >= 0.0
+            ) { Text("Create & add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
