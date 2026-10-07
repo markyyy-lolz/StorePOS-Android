@@ -1325,15 +1325,15 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                     "paid" -> handleStillPaid()
                                     "failed", "expired", "cancelled" -> closeAsCancelled()
                                     else -> {
-                                        val cancelResult = runCatching {
+                                        val cancelledRemote = runCatching {
                                             PayMongoRepository.cancelCheckout(
                                                 context.shop.id,
                                                 pending.sessionId
                                             )
-                                        }
+                                        }.getOrNull()
 
-                                        cancelResult.onSuccess { remote ->
-                                            when (remote.status.lowercase()) {
+                                        if (cancelledRemote != null) {
+                                            when (cancelledRemote.status.lowercase()) {
                                                 "paid" -> handleStillPaid()
                                                 "failed", "expired", "cancelled" -> closeAsCancelled()
                                                 else -> {
@@ -1342,7 +1342,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                                     paymongoRetryNonce += 1
                                                 }
                                             }
-                                        }.onFailure {
+                                        } else {
                                             val afterCancel = runCatching {
                                                 PayMongoRepository.syncCheckout(
                                                     context.shop.id,
