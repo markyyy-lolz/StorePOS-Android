@@ -40,6 +40,15 @@ data class ProductCategory(
 )
 
 @Serializable
+data class ProductCategoryInsert(
+    @SerialName("shop_id") val shopId: String,
+    val name: String,
+    val description: String? = null,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("is_active") val isActive: Boolean = true
+)
+
+@Serializable
 data class Product(
     val id: String,
     @SerialName("shop_id") val shopId: String,
@@ -422,7 +431,7 @@ data class AppVersion(
     val name: String,
     val brand: String? = null,
     @SerialName("part_number") val partNumber: String? = null,
-    @SerialName("item_type") val itemType: String = "part",
+    @SerialName("item_type") val itemType: String = "product",
     @SerialName("cost_price") val costPrice: Double,
     @SerialName("selling_price") val sellingPrice: Double,
     @SerialName("wholesale_price") val wholesalePrice: Double? = null,
