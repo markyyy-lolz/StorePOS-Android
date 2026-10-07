@@ -96,6 +96,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
 
     implementation("androidx.compose.ui:ui:1.11.4")
     implementation("androidx.compose.ui:ui-tooling-preview:1.11.4")
