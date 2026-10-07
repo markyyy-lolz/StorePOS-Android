@@ -120,6 +120,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var paymongoFinalizeError by remember { mutableStateOf<String?>(null) }
     var paymongoPaymentReceived by remember { mutableStateOf(false) }
     var paymongoRetryNonce by remember { mutableIntStateOf(0) }
+    var paymongoCancelBusy by remember { mutableStateOf(false) }
+    var paymongoCancelMessage by remember { mutableStateOf<String?>(null) }
 
     var offlineMode by remember { mutableStateOf(false) }
     var customerDisplayEnabled by remember { mutableStateOf(false) }
@@ -153,9 +155,31 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         }
     }
 
-    LaunchedEffect(customerDisplayEnabled, cart, lastSale, context.shop.name) {
+    LaunchedEffect(
+        customerDisplayEnabled,
+        cart,
+        lastSale,
+        lastReceiptToken,
+        pendingPayMongo,
+        paymongoFinalizeError,
+        paymongoPaymentReceived,
+        context.shop.name
+    ) {
         if (customerDisplayEnabled) {
-            val shown = customerDisplay.show(context.shop.name, cart, lastSale)
+            val pendingQr = pendingPayMongo?.takeIf {
+                !paymongoPaymentReceived && paymongoFinalizeError == null
+            }
+            val receiptUrl = lastReceiptToken?.let {
+                "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
+            }
+            val shown = customerDisplay.show(
+                shopName = context.shop.name,
+                cart = cart,
+                completedSale = lastSale,
+                paymentQrImage = pendingQr?.qrImageUrl,
+                paymentAmount = pendingQr?.amount,
+                receiptUrl = receiptUrl
+            )
             if (!shown) {
                 customerDisplayEnabled = false
                 error = "No external customer display detected. Connect an HDMI / presentation display and try again."
@@ -1214,6 +1238,15 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         )
                     }
 
+                    paymongoCancelMessage?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
                     if (!paymongoPaymentReceived && !verifiedButNotFinalized && !terminalError) {
                         Text(
                             "The sale is not completed until StorePOS receives a verified PayMongo payment status.",
@@ -1240,33 +1273,103 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         }) { Text("Close") }
                     }
                     !paymongoPaymentReceived -> {
-                        TextButton(onClick = { paymongoRetryNonce += 1 }) {
-                            Text("Check now")
+                        TextButton(
+                            onClick = {
+                                paymongoCancelMessage = null
+                                paymongoRetryNonce += 1
+                            },
+                            enabled = !paymongoCancelBusy
+                        ) {
+                            Text(if (paymongoCancelBusy) "Checking…" else "Check now")
                         }
                     }
                 }
             },
             dismissButton = {
                 if (!paymongoPaymentReceived && !verifiedButNotFinalized && !terminalError) {
-                    TextButton(onClick = {
-                        scope.launch {
-                            val cancelled = runCatching {
-                                PayMongoRepository.cancelCheckout(context.shop.id, pending.sessionId)
-                            }
-                            if (cancelled.isSuccess) {
-                                runCatching {
-                                    RetailRepository.releasePayMongoStock(context.shop.id, pending.saleClientKey)
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                if (paymongoCancelBusy) return@launch
+                                paymongoCancelBusy = true
+                                paymongoCancelMessage = "Checking the latest payment status before cancelling…"
+                                error = null
+
+                                suspend fun closeAsCancelled() {
+                                    runCatching {
+                                        RetailRepository.releasePayMongoStock(
+                                            context.shop.id,
+                                            pending.saleClientKey
+                                        )
+                                    }
+                                    pendingPayMongo = null
+                                    paymongoFinalizeError = null
+                                    paymongoPaymentReceived = false
+                                    paymongoCancelMessage = null
                                 }
-                                pendingPayMongo = null
-                                paymongoFinalizeError = null
-                                paymongoPaymentReceived = false
-                                error = "QR Ph payment cancelled. Reserved stock was released and no StorePOS sale was created."
-                            } else {
-                                error = "Could not cancel QR because its payment status may have changed. StorePOS is checking it again."
-                                paymongoRetryNonce += 1
+
+                                fun handleStillPaid() {
+                                    paymongoCancelMessage =
+                                        "Payment was already confirmed. StorePOS will finalize this sale instead of cancelling it."
+                                    paymongoRetryNonce += 1
+                                }
+
+                                val beforeCancel = runCatching {
+                                    PayMongoRepository.syncCheckout(
+                                        context.shop.id,
+                                        pending.sessionId
+                                    )
+                                }.getOrNull()
+
+                                when (beforeCancel?.status?.lowercase()) {
+                                    "paid" -> handleStillPaid()
+                                    "failed", "expired", "cancelled" -> closeAsCancelled()
+                                    else -> {
+                                        val cancelledRemote = runCatching {
+                                            PayMongoRepository.cancelCheckout(
+                                                context.shop.id,
+                                                pending.sessionId
+                                            )
+                                        }.getOrNull()
+
+                                        if (cancelledRemote != null) {
+                                            when (cancelledRemote.status.lowercase()) {
+                                                "paid" -> handleStillPaid()
+                                                "failed", "expired", "cancelled" -> closeAsCancelled()
+                                                else -> {
+                                                    paymongoCancelMessage =
+                                                        "Cancellation was requested. StorePOS is confirming the final QR status before closing it."
+                                                    paymongoRetryNonce += 1
+                                                }
+                                            }
+                                        } else {
+                                            val afterCancel = runCatching {
+                                                PayMongoRepository.syncCheckout(
+                                                    context.shop.id,
+                                                    pending.sessionId
+                                                )
+                                            }.getOrNull()
+
+                                            when (afterCancel?.status?.lowercase()) {
+                                                "paid" -> handleStillPaid()
+                                                "failed", "expired", "cancelled" -> closeAsCancelled()
+                                                else -> {
+                                                    paymongoCancelMessage =
+                                                        "Cancellation could not be confirmed yet. This QR remains active while StorePOS keeps checking. Do not create another QR for this sale."
+                                                    paymongoRetryNonce += 1
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                paymongoCancelBusy = false
                             }
-                        }
-                    }) { Text("Cancel QR") }
+                        },
+                        enabled = !paymongoCancelBusy
+                    ) {
+                        Text(if (paymongoCancelBusy) "Cancelling…" else "Cancel QR")
+                    }
                 }
             }
         )
@@ -1379,6 +1482,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             return@launch
                         }
 
+                        paymongoCancelBusy = false
+                        paymongoCancelMessage = null
                         pendingPayMongo = PendingPayMongoSale(
                             sessionId = started.id,
                             qrImageUrl = qrImage,
