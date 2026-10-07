@@ -607,8 +607,8 @@ private fun BackupExportTab(context: ShopContext) {
 }
 
 private fun csvCell(value: String): String {
-    val safe = value.replace(""", """")
-    return """ + safe + """
+    val safe = value.replace("\"", "\"\"")
+    return "\"" + safe + "\""
 }
 
 @Composable
