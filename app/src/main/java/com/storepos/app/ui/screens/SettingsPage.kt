@@ -44,6 +44,7 @@ fun SettingsPage(context: ShopContext) {
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var posSettingsOpen by remember { mutableStateOf(false) }
     var receiptDesignerOpen by remember { mutableStateOf(false) }
+    var customerDisplaySettingsOpen by remember { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -283,6 +284,32 @@ fun SettingsPage(context: ShopContext) {
         }
 
         PrinterSettingsCard(context)
+
+        MotoCard(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Icon(Icons.Rounded.ScreenshotMonitor, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Customer Display", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Configure the external HDMI / presentation screen used for live customer checkout.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Text(
+                listOf(
+                    if (prefs.getBoolean("customer_display_auto", false)) "Auto-start on" else "Manual start",
+                    if (prefs.getBoolean("customer_display_show_brand", true)) "StorePOS branding on" else "StorePOS branding off"
+                ).joinToString(" • "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = { customerDisplaySettingsOpen = true }) {
+                Text("Configure customer display")
+            }
+        }
+
         MotoCard(Modifier.fillMaxWidth()) {
             Text("Cloud backup & billing", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
@@ -362,6 +389,13 @@ fun SettingsPage(context: ShopContext) {
                 checking = false
             }
         }
+    if (customerDisplaySettingsOpen) {
+        CustomerDisplaySettingsDialog(
+            prefs = prefs,
+            onDismiss = { customerDisplaySettingsOpen = false }
+        )
+    }
+
     if (receiptDesignerOpen) {
         val previewPaperWidth = prefs.getInt("paper_width", posSettings.printerPaperWidthMm)
         ReceiptDesignerDialog(
@@ -503,6 +537,68 @@ private fun DeviceSessionRow(
             Text(if (session.isActive) "Revoke" else "Reactivate")
         }
     }
+}
+
+@Composable
+private fun CustomerDisplaySettingsDialog(
+    prefs: android.content.SharedPreferences,
+    onDismiss: () -> Unit
+) {
+    var autoStart by remember {
+        mutableStateOf(prefs.getBoolean("customer_display_auto", false))
+    }
+    var showBrand by remember {
+        mutableStateOf(prefs.getBoolean("customer_display_show_brand", true))
+    }
+    var idleMessage by remember {
+        mutableStateOf(
+            prefs.getString("customer_display_idle_message", "Ready for your order")
+                ?: "Ready for your order"
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Customer Display Settings", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingSwitchRow("Auto-start when a second display is connected", autoStart) {
+                    autoStart = it
+                }
+                SettingSwitchRow("Show StorePOS branding", showBrand) {
+                    showBrand = it
+                }
+                OutlinedTextField(
+                    value = idleMessage,
+                    onValueChange = { idleMessage = it.take(80) },
+                    label = { Text("Idle message") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Text(
+                    "The POS still has a Customer display button for manual on/off control.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                prefs.edit()
+                    .putBoolean("customer_display_auto", autoStart)
+                    .putBoolean("customer_display_show_brand", showBrand)
+                    .putString(
+                        "customer_display_idle_message",
+                        idleMessage.trim().ifBlank { "Ready for your order" }
+                    )
+                    .apply()
+                onDismiss()
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
