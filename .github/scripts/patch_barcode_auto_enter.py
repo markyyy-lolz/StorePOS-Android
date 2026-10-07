@@ -1,0 +1,141 @@
+from pathlib import Path
+
+path = Path("app/src/main/java/com/storepos/app/ui/screens/PosPage.kt")
+text = path.read_text()
+
+# Hardware barcode scanners usually behave like keyboards and may finish with
+# Enter, carriage return, line feed, or no suffix at all.
+import_anchor = "import androidx.compose.ui.graphics.asImageBitmap\n"
+if "import androidx.compose.ui.input.key.onPreviewKeyEvent" not in text:
+    if import_anchor not in text:
+        raise SystemExit("Could not find Compose graphics import anchor")
+    text = text.replace(
+        import_anchor,
+        import_anchor
+        + "import androidx.compose.ui.input.key.Key\n"
+        + "import androidx.compose.ui.input.key.KeyEventType\n"
+        + "import androidx.compose.ui.input.key.key\n"
+        + "import androidx.compose.ui.input.key.onPreviewKeyEvent\n"
+        + "import androidx.compose.ui.input.key.type\n",
+        1,
+    )
+
+launcher_start_marker = "    val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->"
+launcher_end_marker = "\n\n    fun scanBarcode() {"
+start = text.find(launcher_start_marker)
+if start < 0:
+    raise SystemExit("Could not find barcode launcher start")
+end = text.find(launcher_end_marker, start)
+if end < 0:
+    raise SystemExit("Could not find barcode launcher end")
+
+new_launcher = '''    fun submitScannedCode(rawCode: String) {
+        val code = rawCode.trim()
+        if (code.isBlank()) return
+        val product = products.firstOrNull {
+            it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
+        }
+        if (product != null) {
+            if (product.isWeighed) quantityProduct = product
+            else cart = addLine(cart, product)
+            query = ""
+            error = null
+        } else {
+            query = code
+            error = "Barcode / SKU not found in inventory: " + code
+        }
+    }
+
+    val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        submitScannedCode(result.contents.orEmpty())
+    }'''
+text = text[:start] + new_launcher + text[end:]
+
+for weight in ("1.3f", "1f"):
+    old = f'''                        }},
+                        {{ scanBarcode() }},
+                        Modifier.weight({weight})'''
+    new = f'''                        }},
+                        {{ submitScannedCode(it) }},
+                        {{ scanBarcode() }},
+                        Modifier.weight({weight})'''
+    if old not in text:
+        raise SystemExit(f"Could not find ProductList call for weight {weight}")
+    text = text.replace(old, new, 1)
+
+sig_old = '''    onQuery: (String) -> Unit,
+    onAdd: (Product) -> Unit,
+    onScan: () -> Unit,
+    modifier: Modifier
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {'''
+sig_new = '''    onQuery: (String) -> Unit,
+    onAdd: (Product) -> Unit,
+    onSubmit: (String) -> Unit,
+    onScan: () -> Unit,
+    modifier: Modifier
+) {
+    LaunchedEffect(query, products) {
+        val candidate = query.trim()
+        if (candidate.length >= 6) {
+            delay(160)
+            val exactMatch = products.any {
+                it.barcode.equals(candidate, ignoreCase = true) ||
+                    it.sku.equals(candidate, ignoreCase = true)
+            }
+            if (exactMatch) onSubmit(candidate)
+        }
+    }
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {'''
+if sig_old not in text:
+    raise SystemExit("Could not find ProductList signature")
+text = text.replace(sig_old, sig_new, 1)
+
+product_list_pos = text.find("private fun ProductList(")
+field_start_marker = '''        OutlinedTextField(
+            query,
+            onQuery,
+            modifier = Modifier.fillMaxWidth(),'''
+field_start = text.find(field_start_marker, product_list_pos)
+if field_start < 0:
+    raise SystemExit("Could not find ProductList search field")
+
+field_end_marker = "\n        if (products.isEmpty()) {"
+field_end = text.find(field_end_marker, field_start)
+if field_end < 0:
+    raise SystemExit("Could not find ProductList search field end")
+
+new_field = '''        OutlinedTextField(
+            value = query,
+            onValueChange = { rawValue ->
+                val hasScannerTerminator = rawValue.any { it == '\\n' || it == '\\r' }
+                val cleaned = rawValue.replace("\\n", "").replace("\\r", "")
+                onQuery(cleaned)
+                if (hasScannerTerminator && cleaned.isNotBlank()) onSubmit(cleaned)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Enter) {
+                        val code = query.trim()
+                        if (code.isNotBlank()) onSubmit(code)
+                        true
+                    } else {
+                        false
+                    }
+                },
+            singleLine = true,
+            placeholder = { Text("Search name, SKU, barcode or brand") },
+            leadingIcon = { Icon(Icons.Rounded.Search, null) },
+            trailingIcon = {
+                IconButton(onClick = onScan) {
+                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan barcode")
+                }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )'''
+text = text[:field_start] + new_field + text[field_end:]
+
+path.write_text(text)
+print("Patched", path)
