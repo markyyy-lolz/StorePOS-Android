@@ -43,8 +43,8 @@ android {
         applicationId = "com.storepos.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.5.0"
+        versionCode = 18
+        versionName = "1.5.1"
 
         buildConfigField("String", "SUPABASE_URL", quotedLocalProperty("SUPABASE_URL"))
         buildConfigField(
