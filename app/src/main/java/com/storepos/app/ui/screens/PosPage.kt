@@ -153,9 +153,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         }
     }
 
-    LaunchedEffect(customerDisplayEnabled, cart, context.shop.name) {
+    LaunchedEffect(customerDisplayEnabled, cart, lastSale, context.shop.name) {
         if (customerDisplayEnabled) {
-            val shown = customerDisplay.show(context.shop.name, cart)
+            val shown = customerDisplay.show(context.shop.name, cart, lastSale)
             if (!shown) {
                 customerDisplayEnabled = false
                 error = "No external customer display detected. Connect an HDMI / presentation display and try again."
