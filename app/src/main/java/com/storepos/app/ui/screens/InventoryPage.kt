@@ -778,12 +778,51 @@ private fun StocktakeDialog(
         )
     }
     val submitted = count.status == "submitted"
+    var scanError by remember(count.id) { mutableStateOf<String?>(null) }
+    val stocktakeScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val code = result.contents?.trim().orEmpty()
+        if (code.isNotBlank() && !submitted) {
+            val product = products.firstOrNull {
+                it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
+            }
+            val item = product?.let { p -> items.firstOrNull { it.productId == p.id } }
+            if (product == null || item == null) {
+                scanError = "Barcode / SKU is not part of this stocktake: $code"
+            } else {
+                val current = values[item.productId]?.toDoubleOrNull() ?: 0.0
+                values = values.toMutableMap().apply {
+                    put(item.productId, (current + 1.0).let { next ->
+                        if (next % 1.0 == 0.0) next.toInt().toString() else next.toString()
+                    })
+                }
+                scanError = null
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Stocktake " + count.countNumber) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!submitted) {
+                    Button(
+                        onClick = {
+                            stocktakeScanner.launch(
+                                ScanOptions()
+                                    .setPrompt("Scan item to count")
+                                    .setBeepEnabled(true)
+                                    .setOrientationLocked(false)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.QrCodeScanner, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Scan item +1")
+                    }
+                    scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
                 Text(
                     if (submitted)
                         "Review variances before approval. Approval posts inventory adjustment movements."
