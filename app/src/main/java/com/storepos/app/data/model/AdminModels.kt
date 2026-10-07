@@ -57,3 +57,14 @@ data class StoreBackup(
     val sales: List<Sale>,
     val expenses: List<Expense>
 )
+
+
+@Serializable
+data class MemberPermissionOverride(
+    val id: String,
+    @SerialName("shop_id") val shopId: String,
+    @SerialName("member_id") val memberId: String,
+    @SerialName("permission_key") val permissionKey: String,
+    val allowed: Boolean = true,
+    @SerialName("updated_at") val updatedAt: String
+)
