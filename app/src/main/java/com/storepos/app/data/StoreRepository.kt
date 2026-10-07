@@ -123,6 +123,39 @@ object StoreRepository {
         return ShopContext(userId, shop, membership)
     }
 
+    suspend fun shopMembers(shopId: String): List<ShopMember> =
+        client.from("shop_members").select {
+            filter { eq("shop_id", shopId) }
+        }.decodeList<ShopMember>().sortedBy { it.role }
+
+    suspend fun userProfiles(): List<UserProfile> =
+        client.from("user_profiles").select().decodeList<UserProfile>()
+
+    suspend fun updateMemberRole(memberId: String, role: String, active: Boolean = true) {
+        require(role in setOf("owner", "admin", "manager", "cashier", "inventory", "mechanic")) {
+            "Unsupported StorePOS role."
+        }
+        client.from("shop_members").update({
+            set("role", role)
+            set("is_active", active)
+        }) {
+            filter { eq("id", memberId) }
+        }
+    }
+
+    suspend fun deviceSessions(shopId: String): List<DeviceSession> =
+        client.from("device_sessions").select {
+            filter { eq("shop_id", shopId) }
+        }.decodeList<DeviceSession>().sortedByDescending { it.lastSeenAt }
+
+    suspend fun setDeviceSessionActive(sessionId: String, active: Boolean) {
+        client.from("device_sessions").update({
+            set("is_active", active)
+        }) {
+            filter { eq("id", sessionId) }
+        }
+    }
+
     suspend fun createFirstShop(name: String, phone: String?, address: String?): ShopContext {
         requireNotNull(currentUserId()) { "You must be signed in." }
 
