@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.storepos.app.BuildConfig
+import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.AppVersion
 import com.storepos.app.data.model.DeviceSession
@@ -23,6 +24,7 @@ import com.storepos.app.data.model.ShopContext
 import com.storepos.app.data.model.ShopMember
 import com.storepos.app.data.model.ShopSettings
 import com.storepos.app.data.model.UserProfile
+import com.storepos.app.data.model.MemberPermissionOverride
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.launch
 
@@ -39,6 +41,9 @@ fun SettingsPage(context: ShopContext) {
     var devices by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
     var members by remember { mutableStateOf<List<ShopMember>>(emptyList()) }
     var profiles by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
+    var permissionMember by remember { mutableStateOf<ShopMember?>(null) }
+    var permissionRows by remember { mutableStateOf<List<MemberPermissionOverride>>(emptyList()) }
+    var permissionLoading by remember { mutableStateOf(false) }
     var adminLoading by remember { mutableStateOf(false) }
     var latest by remember { mutableStateOf<AppVersion?>(null) }
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
@@ -173,7 +178,22 @@ fun SettingsPage(context: ShopContext) {
                                         refreshAdminData()
                                     }.onFailure {
                                         error = StoreRepository.userMessage(it)
+                                    },
+                            onPermissions = {
+                                permissionMember = member
+                                permissionLoading = true
+                                scope.launch {
+                                    error = null
+                                    runCatching {
+                                        AdminRepository.memberPermissions(member.id)
+                                    }.onSuccess {
+                                        permissionRows = it
+                                    }.onFailure {
+                                        error = StoreRepository.userMessage(it)
                                     }
+                                    permissionLoading = false
+                                }
+                            }
                                 }
                             }
                         )
@@ -389,6 +409,38 @@ fun SettingsPage(context: ShopContext) {
                 checking = false
             }
         }
+    permissionMember?.let { member ->
+        StaffAccessDialog(
+            member = member,
+            profile = profiles.firstOrNull { it.id == member.userId },
+            overrides = permissionRows,
+            loading = permissionLoading,
+            onDismiss = {
+                permissionMember = null
+                permissionRows = emptyList()
+            },
+            onToggle = { key, allowed ->
+                scope.launch {
+                    permissionLoading = true
+                    error = null
+                    runCatching {
+                        AdminRepository.setMemberPermission(
+                            context.shop.id,
+                            member.id,
+                            key,
+                            allowed
+                        )
+                    }.onSuccess {
+                        permissionRows = AdminRepository.memberPermissions(member.id)
+                    }.onFailure {
+                        error = StoreRepository.userMessage(it)
+                    }
+                    permissionLoading = false
+                }
+            }
+        )
+    }
+
     if (customerDisplaySettingsOpen) {
         CustomerDisplaySettingsDialog(
             prefs = prefs,
@@ -450,7 +502,8 @@ private fun StaffPermissionRow(
     profile: UserProfile?,
     currentUserId: String,
     currentRole: String,
-    onChange: (String, Boolean) -> Unit
+    onChange: (String, Boolean) -> Unit,
+    onPermissions: () -> Unit
 ) {
     var menuOpen by remember(member.id) { mutableStateOf(false) }
     val role = member.role.lowercase()
@@ -485,6 +538,12 @@ private fun StaffPermissionRow(
                 }
             }
             Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = onPermissions, enabled = canEdit) {
+                Icon(Icons.Rounded.Tune, null)
+                Spacer(Modifier.width(4.dp))
+                Text("Access")
+            }
+            Spacer(Modifier.width(8.dp))
             Switch(
                 checked = member.isActive,
                 onCheckedChange = { onChange(role, it) },
@@ -493,6 +552,97 @@ private fun StaffPermissionRow(
         }
         HorizontalDivider()
     }
+}
+
+private data class StaffPermissionDefinition(
+    val key: String,
+    val label: String,
+    val description: String
+)
+
+private val staffPermissionDefinitions = listOf(
+    StaffPermissionDefinition("pos", "Point of Sale", "Open the production register and checkout."),
+    StaffPermissionDefinition("inventory", "Inventory", "Products, stock adjustments, stocktake and labels."),
+    StaffPermissionDefinition("retail_ops", "Retail Operations", "Returns, drawer, controls, promos and retail tools."),
+    StaffPermissionDefinition("customers", "Customers", "Customer profiles, loyalty and store credit."),
+    StaffPermissionDefinition("service", "Service", "Service jobs and workshop workflow."),
+    StaffPermissionDefinition("quotations", "Quotations", "Create and manage quotations."),
+    StaffPermissionDefinition("suppliers", "Suppliers", "Suppliers, purchase orders and payables."),
+    StaffPermissionDefinition("branches", "Branches", "Multi-branch overview and stock transfers."),
+    StaffPermissionDefinition("reports", "Reports", "Financial and product reports."),
+    StaffPermissionDefinition("admin_center", "Admin Center", "Audit trail, sync recovery, diagnostics and backup."),
+    StaffPermissionDefinition("alerts", "Alerts", "Operational and cloud attention center."),
+    StaffPermissionDefinition("support", "Support", "Human StorePOS support threads."),
+    StaffPermissionDefinition("settings", "Settings", "Device, printer and StorePOS configuration.")
+)
+
+@Composable
+private fun StaffAccessDialog(
+    member: ShopMember,
+    profile: UserProfile?,
+    overrides: List<MemberPermissionOverride>,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onToggle: (String, Boolean) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!loading) onDismiss() },
+        title = {
+            Text(
+                "Access • " + (profile?.displayName ?: member.role.uppercase()),
+                fontWeight = FontWeight.Black
+            )
+        },
+        text = {
+            Column(
+                Modifier.heightIn(max = 600.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "These switches can further restrict the staff member's role. They never grant access beyond the selected role or the shop license.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (loading && overrides.isEmpty()) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                androidx.compose.foundation.lazy.LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    items(staffPermissionDefinitions.size) { index ->
+                        val def = staffPermissionDefinitions[index]
+                        val allowed = overrides.firstOrNull { it.permissionKey == def.key }?.allowed != false
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            tonalElevation = 1.dp
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(10.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(def.label, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        def.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = allowed,
+                                    onCheckedChange = { onToggle(def.key, it) },
+                                    enabled = !loading
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss, enabled = !loading) { Text("Done") }
+        }
+    )
 }
 
 private fun rolePermissionSummary(role: String): String = when (role.lowercase()) {
