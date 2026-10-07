@@ -25,12 +25,12 @@ object AdminRepository {
         allowed: Boolean
     ) {
         client.from("shop_member_permissions").upsert(
-            mapOf(
-                "shop_id" to shopId,
-                "member_id" to memberId,
-                "permission_key" to permissionKey,
-                "allowed" to allowed
-            )
+            buildJsonObject {
+                put("shop_id", shopId)
+                put("member_id", memberId)
+                put("permission_key", permissionKey)
+                put("allowed", allowed)
+            }
         ) {
             onConflict = "member_id,permission_key"
         }
