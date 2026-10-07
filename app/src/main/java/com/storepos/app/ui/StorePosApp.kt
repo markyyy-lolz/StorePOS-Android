@@ -42,6 +42,7 @@ enum class AppPage(val label: String, val icon: ImageVector) {
     Operations("Operations", Icons.Rounded.Handyman),
     Branches("Branches", Icons.Rounded.Storefront),
     Reports("Reports", Icons.Rounded.Analytics),
+    AdminCenter("Admin Center", Icons.Rounded.AdminPanelSettings),
     Alerts("Alerts", Icons.Rounded.NotificationsActive),
     Support("Support", Icons.Rounded.SupportAgent),
     Settings("Settings", Icons.Rounded.Settings)
@@ -307,7 +308,7 @@ private fun pagesForRole(role: String): List<AppPage> = when (role.lowercase()) 
 }
 
 private fun pageAllowedByPlan(page: AppPage, entitlements: PlanEntitlements): Boolean {
-    if (page in listOf(AppPage.Dashboard, AppPage.Alerts, AppPage.Support, AppPage.Settings)) return true
+    if (page in listOf(AppPage.Dashboard, AppPage.AdminCenter, AppPage.Alerts, AppPage.Support, AppPage.Settings)) return true
     if (!entitlements.valid) return false
     val features = entitlements.features.toSet()
     return when (page) {
@@ -625,6 +626,7 @@ private fun PageContent(
                 AppPage.Operations -> com.storepos.app.ui.screens.OperationsPage(context)
                 AppPage.Branches -> com.storepos.app.ui.screens.BranchesPage(context)
                 AppPage.Reports -> com.storepos.app.ui.screens.ReportsPage(context)
+                AppPage.AdminCenter -> com.storepos.app.ui.screens.AdminCenterPage(context)
                 AppPage.Alerts -> com.storepos.app.ui.screens.AlertsPage(
                     context = context,
                     onNavigate = { target ->
