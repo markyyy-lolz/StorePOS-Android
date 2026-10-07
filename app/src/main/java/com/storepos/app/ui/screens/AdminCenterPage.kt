@@ -49,6 +49,7 @@ fun AdminCenterPage(context: ShopContext) {
     var profiles by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
     var alerts by remember { mutableStateOf<List<ShopAlert>>(emptyList()) }
     var health by remember { mutableStateOf<JsonObject?>(null) }
+    var schemaHealth by remember { mutableStateOf<JsonObject?>(null) }
     var latestVersion by remember { mutableStateOf<AppVersion?>(null) }
     var auditQuery by remember { mutableStateOf("") }
 
@@ -58,12 +59,14 @@ fun AdminCenterPage(context: ShopContext) {
         val p = async { runCatching { StoreRepository.userProfiles() }.getOrDefault(emptyList()) }
         val al = async { runCatching { StoreRepository.shopAlerts(context.shop.id) }.getOrDefault(emptyList()) }
         val h = async { runCatching { RetailOpsRepository.dataHealth(context.shop.id) }.getOrNull() }
+        val sh = async { runCatching { AdminRepository.schemaHealth() }.getOrNull() }
         val v = async { runCatching { StoreRepository.latestVersion() }.getOrNull() }
 
         auditLogs = a.await()
         profiles = p.await()
         alerts = al.await()
         health = h.await()
+        schemaHealth = sh.await()
         latestVersion = v.await()
     }
 
@@ -183,6 +186,7 @@ fun AdminCenterPage(context: ShopContext) {
                 pendingCount = pending.size,
                 alerts = alerts,
                 health = health,
+                schemaHealth = schemaHealth,
                 latestVersion = latestVersion
             )
             else -> BackupExportTab(context)
@@ -616,6 +620,7 @@ private fun DiagnosticsTab(
     pendingCount: Int,
     alerts: List<ShopAlert>,
     health: JsonObject?,
+    schemaHealth: JsonObject?,
     latestVersion: AppVersion?
 ) {
     LazyColumn(
@@ -648,6 +653,38 @@ private fun DiagnosticsTab(
                     supportingContent = { Text(pendingCount.toString() + " pending transaction(s)") },
                     leadingContent = { Icon(Icons.Rounded.CloudQueue, null) }
                 )
+            }
+        }
+
+        item {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Text("Cloud Schema Health", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                if (schemaHealth == null) {
+                    Text("Schema diagnostic is unavailable.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    val ok = schemaHealth["ok"]?.toString() == "true"
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (ok) Icons.Rounded.CheckCircle else Icons.Rounded.ErrorOutline,
+                            contentDescription = null,
+                            tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (ok) "Required StorePOS tables and RPCs are present."
+                            else "Database migration attention is required.",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    if (!ok) {
+                        schemaHealth["missing_tables"]?.let {
+                            Text("Missing tables: " + it.toString(), style = MaterialTheme.typography.bodySmall)
+                        }
+                        schemaHealth["missing_functions"]?.let {
+                            Text("Missing RPCs: " + it.toString(), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         }
 
