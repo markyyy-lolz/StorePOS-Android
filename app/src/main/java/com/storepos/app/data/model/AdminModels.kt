@@ -45,3 +45,15 @@ data class SupplierPayment(
     @SerialName("paid_by") val paidBy: String,
     @SerialName("paid_at") val paidAt: String
 )
+
+
+@Serializable
+data class StoreBackup(
+    @SerialName("exported_at") val exportedAt: String,
+    val shop: Shop,
+    val products: List<Product>,
+    val customers: List<Customer>,
+    val suppliers: List<Supplier>,
+    val sales: List<Sale>,
+    val expenses: List<Expense>
+)
