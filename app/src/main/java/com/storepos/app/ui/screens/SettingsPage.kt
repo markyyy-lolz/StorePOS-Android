@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.storepos.app.BuildConfig
 import com.storepos.app.data.AdminRepository
@@ -49,6 +50,7 @@ fun SettingsPage(context: ShopContext) {
     var permissionRows by remember { mutableStateOf<List<MemberPermissionOverride>>(emptyList()) }
     var permissionLoading by remember { mutableStateOf(false) }
     var adminLoading by remember { mutableStateOf(false) }
+    var createStaffOpen by remember { mutableStateOf(false) }
     var latest by remember { mutableStateOf<AppVersion?>(null) }
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var posSettingsOpen by remember { mutableStateOf(false) }
@@ -186,6 +188,11 @@ fun SettingsPage(context: ShopContext) {
                     ) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh staff and devices")
                     }
+                }
+                Button(onClick = { createStaffOpen = true }, enabled = !adminLoading) {
+                    Icon(Icons.Rounded.PersonAdd, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Create staff account")
                 }
                 if (adminLoading && members.isEmpty()) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -436,6 +443,98 @@ fun SettingsPage(context: ShopContext) {
                 checking = false
             }
         }
+    if (createStaffOpen && canAdmin) {
+        var staffName by remember { mutableStateOf("") }
+        var staffEmail by remember { mutableStateOf("") }
+        var staffPassword by remember { mutableStateOf("") }
+        var staffRole by remember { mutableStateOf("cashier") }
+        var roleMenuOpen by remember { mutableStateOf(false) }
+        var creatingStaff by remember { mutableStateOf(false) }
+        var createError by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { if (!creatingStaff) createStaffOpen = false },
+            title = { Text("Create StorePOS staff") },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        "Create a Cashier, Manager or Inventory account. The temporary password must be changed at first sign-in.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = staffName,
+                        onValueChange = { staffName = it },
+                        singleLine = true,
+                        label = { Text("Full name") }
+                    )
+                    OutlinedTextField(
+                        value = staffEmail,
+                        onValueChange = { staffEmail = it },
+                        singleLine = true,
+                        label = { Text("Email address") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                    )
+                    OutlinedTextField(
+                        value = staffPassword,
+                        onValueChange = { staffPassword = it },
+                        singleLine = true,
+                        label = { Text("Temporary password (8+ characters)") },
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    Box {
+                        OutlinedButton(onClick = { roleMenuOpen = true }) {
+                            Text("Role: " + staffRole.replaceFirstChar { it.uppercase() })
+                        }
+                        DropdownMenu(
+                            expanded = roleMenuOpen,
+                            onDismissRequest = { roleMenuOpen = false }
+                        ) {
+                            listOf("cashier", "manager", "inventory").forEach { next ->
+                                DropdownMenuItem(
+                                    text = { Text(next.replaceFirstChar { it.uppercase() }) },
+                                    onClick = { staffRole = next; roleMenuOpen = false }
+                                )
+                            }
+                        }
+                    }
+                    createError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !creatingStaff && staffName.isNotBlank() &&
+                        staffEmail.contains('@') && staffPassword.length >= 8,
+                    onClick = {
+                        creatingStaff = true
+                        createError = null
+                        scope.launch {
+                            runCatching {
+                                StoreRepository.createStaffAccount(
+                                    context.shop.id, staffName, staffEmail, staffPassword, staffRole
+                                )
+                            }.onSuccess {
+                                staffPassword = ""
+                                createStaffOpen = false
+                                refreshAdminData()
+                            }.onFailure {
+                                createError = StoreRepository.userMessage(it)
+                            }
+                            creatingStaff = false
+                        }
+                    }
+                ) { Text(if (creatingStaff) "Creating…" else "Create staff") }
+            },
+            dismissButton = {
+                TextButton(onClick = { createStaffOpen = false }, enabled = !creatingStaff) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     permissionMember?.let { member ->
         StaffAccessDialog(
             member = member,
@@ -553,7 +652,7 @@ private fun StaffPermissionRow(
                     Text(role.uppercase())
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    listOf("admin", "manager", "cashier", "inventory", "mechanic").forEach { next ->
+                    listOf("manager", "cashier", "inventory").forEach { next ->
                         DropdownMenuItem(
                             text = { Text(next.replaceFirstChar { it.uppercase() }) },
                             onClick = {
