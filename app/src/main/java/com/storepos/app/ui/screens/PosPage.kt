@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.VibrationEffect
 import android.os.Vibrator
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -41,6 +42,8 @@ import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import com.storepos.app.printing.BluetoothReceiptPrinter
 import com.storepos.app.printing.PrinterDevice
+import com.storepos.app.printing.PdfReceiptLine
+import com.storepos.app.printing.ReceiptPdfExporter
 import com.storepos.app.printing.ReceiptPrinter
 import com.storepos.app.printing.UsbReceiptPrinter
 import kotlinx.coroutines.async
@@ -137,6 +140,38 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     }
     val offlineStore = remember { OfflineStore(androidContext) }
     val customerDisplay = remember { CustomerDisplayController(androidContext) }
+    var pendingReceiptPdf by remember { mutableStateOf<Pair<String, ByteArray>?>(null) }
+    val saveReceiptPdf = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val pending = pendingReceiptPdf
+        pendingReceiptPdf = null
+        if (uri != null && pending != null) {
+            runCatching { ReceiptPdfExporter.save(androidContext, uri, pending.second) }
+                .onSuccess { printMessage = "Receipt PDF saved. You can reopen and print it from Files anytime." }
+                .onFailure { error = "Unable to save receipt PDF: " + (it.localizedMessage ?: "Storage error") }
+        }
+    }
+
+    fun completedReceiptPdf(sale: Sale): ByteArray =
+        ReceiptPdfExporter.render(
+            shop = context.shop,
+            sale = sale,
+            settings = settings,
+            lines = lastReceiptCart.map { line ->
+                PdfReceiptLine(
+                    name = line.product.name,
+                    sku = line.product.sku,
+                    quantity = line.quantity,
+                    unitPrice = line.unitPrice,
+                    lineTotal = line.lineTotal
+                )
+            },
+            customerName = customers.firstOrNull { it.id == sale.customerId }?.name,
+            paymentSummary = lastPayments.joinToString(", ") { it.method.replace("_", " ").uppercase() },
+            duplicate = true
+        )
+
     val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
     val vibrator = remember { androidContext.getSystemService(Vibrator::class.java) }
     DisposableEffect(Unit) {
@@ -1023,6 +1058,36 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     }
                 } else {
                     val printerAddress = prefs.getString("printer_address", null)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching { completedReceiptPdf(sale) }
+                                        .onSuccess { bytes ->
+                                            pendingReceiptPdf = sale.saleNumber to bytes
+                                            saveReceiptPdf.launch(ReceiptPdfExporter.fileName(sale.saleNumber))
+                                        }
+                                        .onFailure { error = "PDF error: " + (it.localizedMessage ?: "Cannot export receipt") }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.PictureAsPdf, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Save PDF")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        ReceiptPdfExporter.share(androidContext, completedReceiptPdf(sale), sale.saleNumber)
+                                    }.onFailure { error = "Share failed: " + (it.localizedMessage ?: "Cannot share PDF") }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.Share, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Share PDF")
+                            }
+                        }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = {
@@ -1059,6 +1124,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         Button(onClick = clearCompletedSale, modifier = Modifier.weight(1f)) {
                             Text("Done")
                         }
+                    }
                     }
                 }
             },
