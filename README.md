@@ -103,3 +103,9 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Digital receipt QR can be enabled or disabled per shop.
 - Store identity stays first and Powered by StorePOS stays at the bottom.
 - Proper Android adaptive launcher icon fixes generic placeholder icons on tablets and POS terminals.
+
+
+## v1.6.2 — Staff First-Login Security
+- Enforces a required password change for newly created StorePOS staff accounts before Android workspace access.
+- Uses the live StorePOS `invite-staff` Edge Function v4 for authenticated password changes.
+- Keeps existing linked-user passwords intact and preserves all StorePOS data.
