@@ -102,7 +102,11 @@ jobs:
           if gh release view "$RELEASE_NAME" >/dev/null 2>&1; then
             gh release upload "$RELEASE_NAME" "StorePOS-${RELEASE_NAME}.apk" --clobber
           else
-            gh release create "$RELEASE_NAME" \
+            PRERELEASE_FLAGS=()
+            if [[ "$RELEASE_NAME" == *-rc* || "$RELEASE_NAME" == *-beta* ]]; then
+              PRERELEASE_FLAGS+=(--prerelease)
+            fi
+            gh release create "$RELEASE_NAME" "${PRERELEASE_FLAGS[@]}" \
               "StorePOS-${RELEASE_NAME}.apk" \
               --target "$GITHUB_SHA" \
               --title "StorePOS $RELEASE_NAME" \
