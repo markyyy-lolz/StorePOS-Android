@@ -429,21 +429,29 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             sectionOrder = settings.receiptSectionOrder
         )
         if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
+            val printerQueue = com.storepos.app.printing.SharedPrintRepository
+            val jobKey = printerQueue.requestKey(sale.id,receiptPrintedOnce)
+            val deviceId = printerQueue.deviceId(androidContext)
+            val kind = if (receiptPrintedOnce) "reprint" else "sale"
             return runCatching {
-                val printerQueue = com.storepos.app.printing.SharedPrintRepository
                 val jobId = printerQueue.enqueue(
-                    context.shop.id,
-                    printerQueue.deviceId(androidContext),
-                    if (receiptPrintedOnce) "reprint" else "sale",
-                    payload,
-                    printerQueue.requestKey(sale.id, receiptPrintedOnce),
-                    sale.id,
-                    sale.saleNumber
+                    context.shop.id, deviceId, kind, payload, jobKey, sale.id, sale.saleNumber
                 )
                 "Receipt sent to shared queue (" + jobId.take(8) + ")."
-            }.getOrElse {
-                "Shared printer queue unavailable. Sale is saved; use Print receipt to retry. " +
-                    (it.message ?: "Check connection.")
+            }.getOrElse { failure ->
+                runCatching {
+                    com.storepos.app.printing.SharedPrintOutbox.save(
+                        androidContext,
+                        com.storepos.app.printing.PendingSharedPrint(
+                            context.shop.id, deviceId, jobKey, kind, sale.id, sale.saleNumber,
+                            android.util.Base64.encodeToString(payload,android.util.Base64.NO_WRAP)
+                        )
+                    )
+                    "Receipt saved to local print queue. StorePOS will send it after reconnection."
+                }.getOrElse { saveError ->
+                    "Print request not saved. Sale remains recorded; manually print once connected. " +
+                        (saveError.message ?: failure.message ?: "Try again.")
+                }
             }
         }
         val address = prefs.getString("printer_address", null)
@@ -465,6 +473,17 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             onSuccess = { "Receipt sent to printer." },
             onFailure = { it.message ?: "Unable to print receipt." }
         )
+    }
+
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
+                runCatching {
+                    com.storepos.app.printing.SharedPrintOutbox.flush(androidContext,context.shop.id)
+                }
+            }
+            delay(30_000)
+        }
     }
 
     LaunchedEffect(context.shop.id) {
