@@ -1,25 +1,22 @@
-# StorePOS v1.6.1 — QR Payment & Customer Display Fix
+# StorePOS v1.6.2 — Staff First-Login Security
 
-This patch improves the live QR Ph checkout flow and makes the customer display useful during payment and after checkout.
+This release completes the StorePOS Staff Management v2 flow across StorePOS Cloud and Android.
 
-## Customer Display
-- Mirrors the active QR Ph payment QR to the second/customer display.
-- Shows the exact amount due beside the payment QR.
-- After a successful sale, the customer display shows Payment Complete, total paid, change due and receipt number.
-- If a digital receipt token is available, the customer display shows a scannable digital receipt QR code.
-- Digital receipt QR remains separate from the payment QR so customers can clearly tell when they are paying versus collecting a receipt.
+## Staff first sign-in
+- New StorePOS staff accounts created with a temporary password are now required to choose their own password before entering the Android app.
+- The requirement is read from server-controlled Supabase `app_metadata.must_change_password`.
+- Password changes are completed through the authenticated StorePOS `invite-staff` Edge Function.
+- After changing the temporary password, the staff member signs in again with the new password.
 
-## QR Payment Reliability
-- QR cancellation now checks the latest PayMongo status before cancelling.
-- Prevents a race where a payment could be confirmed while the cashier is pressing Cancel QR.
-- If payment is already confirmed, StorePOS finalizes the sale instead of cancelling.
-- If cancellation cannot be confirmed yet, StorePOS keeps the QR active and continues checking instead of showing the previous global red cancellation error.
-- Cancel and Check Now controls are locked while cancellation verification is in progress.
-- Reserved stock is released only after the QR is confirmed failed, expired or cancelled.
+## Security
+- Temporary-password enforcement happens before shop/device/license access is loaded.
+- Passwords are never stored in StorePOS tables or logs.
+- The password-change flag is cleared server-side only after the password update succeeds.
+- Existing linked Supabase accounts keep their existing password and are not forced through this flow unless explicitly marked.
 
 ## Compatibility
 - Android 8.0+ (minSdk 26)
 - Package: com.storepos.app
-- Version code: 20
-- Version name: 1.6.1
-- Existing StorePOS data, shops, products, customers, sales and licenses are preserved.
+- Version code: 21
+- Version name: 1.6.2
+- Existing shops, products, sales, customers and licenses are preserved.
