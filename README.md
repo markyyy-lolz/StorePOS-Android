@@ -123,3 +123,10 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Selected 58mm or 80mm roll width, not a separate A4 PDF invoice.
 - Recorded payment details are used for historical receipt exports.
 - Old expired digital QR tokens and old cashier labels may be unrecoverable.
+
+
+## v1.7.0 Release Candidate — VOZY G80 Shared Printer
+- Two Android tablets share one Bluetooth/USB 80mm VOZY G80 printer through a foreground print host and Supabase FIFO queue.
+- Atomic claims, safe bounded retries, manual uncertain-print review, authenticated shop isolation and owner/admin reassignment.
+- Client-side offline print outbox, receipt tax/customer sections, PDF parity and X/Z/batch printout options.
+- Physical hardware validation remains pending; see SHARED_PRINTER_V170.md.

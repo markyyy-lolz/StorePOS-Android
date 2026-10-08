@@ -338,6 +338,7 @@ fun SettingsPage(context: ShopContext) {
         }
 
         PrinterSettingsCard(context)
+        SharedPrinterSettingsCard(context)
 
         MotoCard(Modifier.fillMaxWidth()) {
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {

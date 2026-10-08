@@ -13,6 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.storepos.app.printing.SharedPrintDispatcher
+import com.storepos.app.printing.ThermalReportFormatter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -330,6 +332,26 @@ fun OperationsPage(context: ShopContext) {
                         color = if (kotlin.math.abs(z.variance) < .01) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            scope.launch {
+                                runCatching {
+                                    val bytes = ThermalReportFormatter.z(context.shop,z,context.userId.take(8))
+                                    SharedPrintDispatcher.dispatch(androidContext,context.shop.id,"z_report",bytes)
+                                }.onSuccess { receiptNotice = it }
+                                 .onFailure { error = StoreRepository.userMessage(it) }
+                            }
+                        }) { Text("Print Z reading") }
+                        OutlinedButton(onClick = {
+                            scope.launch {
+                                runCatching {
+                                    val bytes = ThermalReportFormatter.z(context.shop,z,context.userId.take(8),true)
+                                    SharedPrintDispatcher.dispatch(androidContext,context.shop.id,"batch_report",bytes)
+                                }.onSuccess { receiptNotice = it }
+                                 .onFailure { error = StoreRepository.userMessage(it) }
+                            }
+                        }) { Text("Batch sales") }
+                    }
                 }
             }
         }

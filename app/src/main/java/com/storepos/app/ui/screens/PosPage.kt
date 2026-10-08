@@ -400,54 +400,72 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         payments: List<CheckoutPayment>,
         receiptToken: String? = null
     ): String {
+        val paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm)
+        val payload = BluetoothReceiptPrinter.saleReceipt(
+            shopName = context.shop.name,
+            sale = sale,
+            cart = soldCart,
+            paperWidth = paperWidth,
+            receiptHeader = settings.receiptHeader,
+            receiptFooter = settings.receiptFooter,
+            payments = payments,
+            cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
+            openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
+            digitalReceiptUrl = receiptToken?.let {
+                "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
+            },
+            shopAddress = context.shop.address,
+            shopPhone = context.shop.phone,
+            shopTin = context.shop.tin,
+            receiptTitle = settings.receiptTitle,
+            showAddress = settings.receiptShowAddress,
+            showPhone = settings.receiptShowPhone,
+            showTin = settings.receiptShowTin,
+            showReceiptNumber = settings.receiptShowReceiptNumber,
+            showDate = settings.receiptShowDate,
+            showPaymentReference = settings.receiptShowPaymentReference,
+            showDigitalQr = settings.receiptShowDigitalQr,
+            compactMode = settings.receiptCompactMode,
+            sectionOrder = settings.receiptSectionOrder
+        )
+        if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
+            val printerQueue = com.storepos.app.printing.SharedPrintRepository
+            val jobKey = printerQueue.requestKey(sale.id,receiptPrintedOnce)
+            val deviceId = printerQueue.deviceId(androidContext)
+            val kind = if (receiptPrintedOnce) "reprint" else "sale"
+            return runCatching {
+                val jobId = printerQueue.enqueue(
+                    context.shop.id, deviceId, kind, payload, jobKey, sale.id, sale.saleNumber
+                )
+                "Receipt sent to shared queue (" + jobId.take(8) + ")."
+            }.getOrElse { failure ->
+                runCatching {
+                    com.storepos.app.printing.SharedPrintOutbox.save(
+                        androidContext,
+                        com.storepos.app.printing.PendingSharedPrint(
+                            context.shop.id, deviceId, jobKey, kind, sale.id, sale.saleNumber,
+                            android.util.Base64.encodeToString(payload,android.util.Base64.NO_WRAP)
+                        )
+                    )
+                    "Receipt saved to local print queue. StorePOS will send it after reconnection."
+                }.getOrElse { saveError ->
+                    "Print request not saved. Sale remains recorded; manually print once connected. " +
+                        (saveError.message ?: failure.message ?: "Try again.")
+                }
+            }
+        }
         val address = prefs.getString("printer_address", null)
             ?: return "No receipt printer selected."
-        val printerName = prefs.getString("printer_name", "Receipt printer") ?: "Receipt printer"
-        val paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm)
+        val name = prefs.getString("printer_name", "Receipt printer") ?: "Receipt printer"
         val transport = prefs.getString("printer_transport", "bluetooth") ?: "bluetooth"
-
         if (transport == "usb" && !UsbReceiptPrinter.hasPermission(androidContext, address)) {
             UsbReceiptPrinter.requestPermission(androidContext, address)
-            return "USB printer permission is required. Approve it in Android, then print again."
+            return "USB printer permission required. Approve it, then print again."
         }
-
-        val printer: ReceiptPrinter = if (transport == "usb") {
-            UsbReceiptPrinter(androidContext)
-        } else {
-            BluetoothReceiptPrinter(androidContext)
-        }
-        val result = printer.connect(PrinterDevice(printerName, address, transport)).fold(
-            onSuccess = {
-                printer.printReceipt(
-                    BluetoothReceiptPrinter.saleReceipt(
-                        shopName = context.shop.name,
-                        sale = sale,
-                        cart = soldCart,
-                        paperWidth = paperWidth,
-                        receiptHeader = settings.receiptHeader,
-                        receiptFooter = settings.receiptFooter,
-                        payments = payments,
-                        cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
-                        openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
-                        digitalReceiptUrl = receiptToken?.let {
-                            "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
-                        },
-                        shopAddress = context.shop.address,
-                        shopPhone = context.shop.phone,
-                        shopTin = context.shop.tin,
-                        receiptTitle = settings.receiptTitle,
-                        showAddress = settings.receiptShowAddress,
-                        showPhone = settings.receiptShowPhone,
-                        showTin = settings.receiptShowTin,
-                        showReceiptNumber = settings.receiptShowReceiptNumber,
-                        showDate = settings.receiptShowDate,
-                        showPaymentReference = settings.receiptShowPaymentReference,
-                        showDigitalQr = settings.receiptShowDigitalQr,
-                        compactMode = settings.receiptCompactMode,
-                        sectionOrder = settings.receiptSectionOrder
-                    )
-                )
-            },
+        val printer: ReceiptPrinter = if (transport == "usb") UsbReceiptPrinter(androidContext)
+            else BluetoothReceiptPrinter(androidContext)
+        val result = printer.connect(PrinterDevice(name, address, transport)).fold(
+            onSuccess = { printer.printReceipt(payload) },
             onFailure = { Result.failure(it) }
         )
         printer.disconnect()
@@ -455,6 +473,17 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             onSuccess = { "Receipt sent to printer." },
             onFailure = { it.message ?: "Unable to print receipt." }
         )
+    }
+
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
+                runCatching {
+                    com.storepos.app.printing.SharedPrintOutbox.flush(androidContext,context.shop.id)
+                }
+            }
+            delay(30_000)
+        }
     }
 
     LaunchedEffect(context.shop.id) {
@@ -534,7 +563,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         error = null
                         refresh()
 
-                        if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
+                        if (settings.autoPrintReceipt && (prefs.getString("printer_address", null) != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct")) {
                             printing = true
                             printMessage = printSale(result.sale, lastReceiptCart, lastPayments, lastReceiptToken)
                             if (printMessage?.startsWith("Receipt sent") == true) receiptPrintedOnce = true
@@ -1117,7 +1146,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                     printing = false
                                 }
                             },
-                            enabled = printerAddress != null && !printing,
+                            enabled = (printerAddress != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") && !printing,
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Rounded.Print, null)
@@ -1612,7 +1641,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         checkout = false
                         refresh()
 
-                        if (settings.autoPrintReceipt && prefs.getString("printer_address", null) != null) {
+                        if (settings.autoPrintReceipt && (prefs.getString("printer_address", null) != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct")) {
                             printing = true
                             printMessage = printSale(sale, lastReceiptCart, payments, lastReceiptToken)
                             if (printMessage?.startsWith("Receipt sent") == true) receiptPrintedOnce = true

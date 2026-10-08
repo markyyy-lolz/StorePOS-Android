@@ -142,6 +142,7 @@ class BluetoothReceiptPrinter(
 
             sections["meta"] = buildList {
                 if (showReceiptNumber) add("Receipt No: " + sale.saleNumber)
+                add("POS Terminal: StorePOS")
                 if (showDate) sale.createdAt?.let { add("Date: " + it.replace("T", " ").take(19)) }
                 cashierLabel?.let { add("Cashier: " + it.take((width - 9).coerceAtLeast(1))) }
                 add(thin)
@@ -194,6 +195,19 @@ class BluetoothReceiptPrinter(
                 }
             }
 
+            sections["tax"] = buildList {
+                add("VAT / TAX DECLARATION")
+                add(fitPair("Net of recorded tax", amount((sale.totalAmount - sale.taxAmount).coerceAtLeast(0.0)), width))
+                add(fitPair("Recorded tax", amount(sale.taxAmount), width))
+                add(fitPair("Total discount", amount(sale.discountAmount), width))
+                add(thin)
+                add("CUSTOMER INFORMATION")
+                add("Customer: _______________________________".take(width))
+                add("Address: ________________________________".take(width))
+                add("TIN: ____________________________________".take(width))
+                add("Signature: ______________________________".take(width))
+            }
+
             sections["footer"] = buildList {
                 add(thin)
                 receiptFooter?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
@@ -207,7 +221,7 @@ class BluetoothReceiptPrinter(
                 add(center("Retail Management & POS System", width))
             }
 
-            val editable = listOf("meta", "items", "totals", "payment", "digital")
+            val editable = listOf("meta", "items", "totals", "payment", "tax", "digital")
             val normalizedMiddle = sectionOrder
                 .filter { it in editable }
                 .distinct()

@@ -32,6 +32,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.LocalDate
+import java.time.Instant
+import androidx.compose.ui.platform.LocalContext
+import com.storepos.app.printing.SharedPrintDispatcher
+import com.storepos.app.printing.ThermalReportFormatter
 
 private fun JsonObject.text(key: String): String =
     this[key]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -48,6 +52,7 @@ private fun healthIssueCount(health: JsonObject): Int =
 
 @Composable
 fun RetailControlPage(context: ShopContext) {
+    val androidContext = LocalContext.current
     val role = context.member.role.lowercase()
     val manager = role in listOf("owner", "admin", "manager")
     val purchasing = manager || role == "inventory"
@@ -475,7 +480,17 @@ fun RetailControlPage(context: ShopContext) {
         )
     }
 
-    xReport?.let { report -> XReportDialog(report = report, onDismiss = { xReport = null }) }
+    xReport?.let { report ->
+        XReportDialog(report = report, onDismiss = { xReport = null }, onPrint = {
+            scope.launch {
+                runCatching {
+                    val bytes = ThermalReportFormatter.x(
+                        context.shop,report,context.userId.take(8),Instant.now().toString())
+                    SharedPrintDispatcher.dispatch(androidContext,context.shop.id,"x_report",bytes)
+                }.onSuccess { notice = it }.onFailure { error = StoreRepository.userMessage(it) }
+            }
+        })
+    }
 }
 
 private fun safeControlQty(value: Double): String =
@@ -573,7 +588,7 @@ private fun ApprovalRequestDialog(
 }
 
 @Composable
-private fun XReportDialog(report: JsonObject, onDismiss: () -> Unit) {
+private fun XReportDialog(report: JsonObject, onDismiss: () -> Unit, onPrint: () -> Unit) {
     val payments = runCatching { report["payment_breakdown"]?.jsonObject }.getOrNull() ?: JsonObject(emptyMap())
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -598,7 +613,12 @@ private fun XReportDialog(report: JsonObject, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { Button(onClick = onDismiss) { Text("Done") } }
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onPrint) { Text("Print X reading") }
+                Button(onClick = onDismiss) { Text("Done") }
+            }
+        }
     )
 }
 
