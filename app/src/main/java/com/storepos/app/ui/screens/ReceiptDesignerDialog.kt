@@ -22,7 +22,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.storepos.app.data.model.Shop
 import com.storepos.app.data.model.ShopSettings
 
-private val receiptEditableSections = listOf("meta", "items", "totals", "payment", "digital")
+private val receiptEditableSections = listOf("meta", "items", "totals", "payment", "tax", "digital")
 
 private fun normalizedReceiptOrder(raw: List<String>): List<String> {
     val ordered = raw.filter { it in receiptEditableSections }.distinct().toMutableList()
@@ -35,6 +35,7 @@ private fun sectionLabel(key: String): String = when (key) {
     "items" -> "Items"
     "totals" -> "Totals"
     "payment" -> "Payment"
+    "tax" -> "Tax declaration & customer fields"
     "digital" -> "Digital receipt QR"
     else -> key
 }
@@ -457,6 +458,7 @@ private fun ReceiptDesignerPreview(
     val sections = mapOf(
         "meta" to buildList {
             if (showReceiptNumber) add("Receipt No: S-2026-000128")
+            add("POS Terminal: StorePOS")
             if (showDate) add("Date: Oct 06, 2026 10:55 AM")
             if (showCashier) add("Cashier: Sample Cashier")
             add(thin)
@@ -479,6 +481,18 @@ private fun ReceiptDesignerPreview(
             add(pair("Status", "PAID"))
             if (showPaymentReference) add("Ref: pay_sample123456789")
         },
+        "tax" to listOf(
+            "VAT / TAX DECLARATION",
+            pair("Net of recorded tax", "PHP 70.00"),
+            pair("Recorded tax", "PHP 0.00"),
+            pair("Total discount", "PHP 0.00"),
+            thin,
+            "CUSTOMER INFORMATION",
+            "Customer: _______________________________".take(chars),
+            "Address: ________________________________".take(chars),
+            "TIN: ____________________________________".take(chars),
+            "Signature: ______________________________".take(chars)
+        ),
         "digital" to if (showDigitalQr) listOf(
             thin,
             center("DIGITAL RECEIPT"),
