@@ -62,7 +62,7 @@ class SharedPrintHostService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, channel)
-            .setSmallIcon(android.R.drawable.ic_menu_print)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("StorePOS • VOZY G80 Print Host")
             .setContentText(status)
             .setContentIntent(open)
@@ -95,7 +95,7 @@ class SharedPrintHostService : Service() {
         val payload = job.payloadBase64?.let {
             runCatching { Base64.decode(it, Base64.DEFAULT) }.getOrNull()
         }
-        if (payload.isNullOrEmpty()) {
+        if (payload == null || payload.isEmpty()) {
             SharedPrintRepository.failure(shopId,deviceId,job.id,"Receipt payload is missing",false)
             return
         }
