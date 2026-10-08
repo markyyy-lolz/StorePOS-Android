@@ -1,64 +1,23 @@
-# StorePOS Android v1.6.4 — Thermal-matched PDF Receipts
+# StorePOS Android v1.7.0-rc1 — VOZY G80 Shared Printing (TEST BUILD)
 
-## One receipt, two outputs
-- Saved PDF now uses the same ESC/POS print data as Bluetooth/USB printers, instead of a separate A4 design.
-- Physical PDF width follows the selected 58mm/80mm paper size (32/48 columns).
-- Item names, prices, header, footer, tax, totals, section order and receipt QR content match the thermal data.
-- Historical receipts fetch recorded payment methods, amounts and references from StorePOS Cloud.
-- Long receipts continue onto additional narrow pages. Saved PDFs do not expire.
-- Android print dialog uses 58mm/80mm paper-width hints, subject to printer driver support.
-- Existing direct thermal printing remains untouched.
+This version is a **release candidate for hardware acceptance only**, not the approved final StorePOS v1.7.0 production release. The feature is opt-in: existing installs remain in Direct printer mode until configured.
 
-## Limitation for past transactions
-- Expired digital receipt QR tokens and the exact old cashier label may not be recoverable. No unavailable information is invented.
-- Historic PDFs use the current shop receipt design for the original sale items and recorded payments.
+## New
+- Two Android cashiers share one VOZY G80 USB/Bluetooth printer.
+- Tablet 1 is the printer host; Tablet 2 sends print requests over a Supabase shop-scoped FIFO queue.
+- Foreground host status notification, atomic queue claims, automatic connection retries (up to three), manual review of uncertain partial writes, and owner/admin host reassignment.
+- Offline remote cashier receipts are persisted in a local outbox and replayed with stable request keys when back online.
+- Print queue status and manual recovery tools in Settings.
+- 80mm receipt tax/customer information and professional live X, archived Z and batch printouts; thermal/PDF share the receipt template.
 
-## Compatibility
-- Android 8.0+; package com.storepos.app; version code 23.
-- No database changes, stock adjustments or changes to PayMongo payment processing.
+## What remains
+- **Unverified on physical VOZY G80 and two tablets.** Run SHARED_PRINTER_V170.md acceptance tests before production use.
+- Logo bitmap printing and fully compliant/accredited Philippine tax-invoice formatting are not complete.
+- SENT means a successful ESC/POS byte transfer, not independent physical receipt confirmation.
+- Stable Android v1.6.4 remains recommended for production until the acceptance tests pass.
 
----
+## Setup
+Pair the G80 with Tablet 1. In StorePOS Settings select G80 80mm and test the Bluetooth connection; then tap Assign this tablet as host in Shared Printer Mode. On Tablet 2 enable Remote cashier and try Queue test print. For instructions and failure recovery see SHARED_PRINTER_V170.md in source repository.
 
-# StorePOS Android v1.6.3 — Permanent PDF Receipt Archive
-
-## New receipt actions
-- After completed checkout: **Save PDF** and **Share PDF**, alongside existing Bluetooth/USB thermal printing.
-- Operations > Receipts & Sales Aftercare: search by receipt number or date, then **Save PDF**, **Share**, or **Print PDF** from recorded sales.
-- Uses the original sale item snapshots and original sold prices, not current catalog pricing.
-- A4 multi-page PDF with shop identity, itemized quantities, discounts, tax, payment summary where available, and sale number.
-- Explicit **duplicate copy** and **not an official tax receipt** labeling; receipts generated from sales history are for recordkeeping and do not change payment or inventory state.
-- Android's Storage Access Framework saves PDF to a user-selected destination (including device files or a connected document provider) without broad storage permissions.
-- Share PDFs securely using scoped temporary FileProvider access.
-- Android system Print dialog prints historical PDF copies; the print request is submitted to the existing StorePOS receipt reprint audit.
-
-## Compatibility
-- Android 8.0+; application ID com.storepos.app.
-- Version code: 22; version name: 1.6.3.
-- Existing Supabase transactions, PayMongo integration, stock, shop data and digital receipts remain unchanged.
-- PDF files saved to the device remain available without internet access. Historical PDF generation requires the saved sale items to be retrievable from StorePOS Cloud.
-- Print output availability depends on installed Android print services; 58mm/80mm ESC/POS printing continues to use the existing direct printing path.
-
----
-
-# StorePOS v1.6.2 — Staff First-Login Security
-
-This release completes the StorePOS Staff Management v2 flow across StorePOS Cloud and Android.
-
-## Staff first sign-in
-- New StorePOS staff accounts created with a temporary password are now required to choose their own password before entering the Android app.
-- The requirement is read from server-controlled Supabase `app_metadata.must_change_password`.
-- Password changes are completed through the authenticated StorePOS `invite-staff` Edge Function.
-- After changing the temporary password, the staff member signs in again with the new password.
-
-## Security
-- Temporary-password enforcement happens before shop/device/license access is loaded.
-- Passwords are never stored in StorePOS tables or logs.
-- The password-change flag is cleared server-side only after the password update succeeds.
-- Existing linked Supabase accounts keep their existing password and are not forced through this flow unless explicitly marked.
-
-## Compatibility
-- Android 8.0+ (minSdk 26)
-- Package: com.storepos.app
-- Version code: 21
-- Version name: 1.6.2
-- Existing shops, products, sales, customers and licenses are preserved.
+## Build
+APK is a debug-signed candidate, not a Google Play production-signed APK.
