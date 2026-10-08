@@ -113,7 +113,8 @@ fun OperationsPage(context: ShopContext) {
                         )
                     },
                     payments = restoredPayments,
-                    cashierLabel = StoreRepository.currentUserEmail() ?: context.member.role,
+                    // Do not misidentify the person exporting an old receipt as its original cashier.
+                    cashierLabel = null,
                     paperWidth = prefs.getInt("paper_width", receiptSettings.printerPaperWidthMm)
                 )
             }.onSuccess { bytes ->
