@@ -116,3 +116,10 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Share PDFs via Android's secure share sheet and print historical PDFs via system print services.
 - Original recorded sale-item snapshots; duplicate-copy watermark and multi-page item list.
 - Device-saved PDFs remain printable offline; fetching an unsaved historical receipt requires cloud access.
+
+
+## v1.6.4 — Thermal-matched receipt PDFs
+- PDF exports use exactly the same ESC/POS text and QR payload as direct thermal printing.
+- Selected 58mm or 80mm roll width, not a separate A4 PDF invoice.
+- Recorded payment details are used for historical receipt exports.
+- Old expired digital QR tokens and old cashier labels may be unrecoverable.

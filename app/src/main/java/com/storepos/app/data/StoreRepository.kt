@@ -743,6 +743,16 @@ object StoreRepository {
             filter { eq("sale_id", saleId) }
         }.decodeList()
 
+    /** Recorded payment methods and amounts for a historical thermal receipt copy. */
+    suspend fun salePayments(shopId: String, saleId: String): List<CheckoutPayment> =
+        client.from("payments").select {
+            filter {
+                eq("shop_id", shopId)
+                eq("sale_id", saleId)
+                eq("status", "paid")
+            }
+        }.decodeList()
+
     suspend fun voidSale(saleId: String, managerPin: String, reason: String): Sale =
         client.postgrest.rpc(
             "void_sale_transaction",

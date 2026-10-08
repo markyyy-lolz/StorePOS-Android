@@ -93,6 +93,12 @@ fun OperationsPage(context: ShopContext) {
                 require(soldItems.isNotEmpty()) {
                     "Original sale items are unavailable. No incomplete receipt was generated."
                 }
+                val recordedPayments = StoreRepository.salePayments(context.shop.id, sale.id)
+                val restoredPayments = recordedPayments.map { payment ->
+                    if (recordedPayments.size == 1 && payment.method == "cash") {
+                        payment.copy(tendered = sale.amountTendered)
+                    } else payment
+                }
                 ReceiptPdfExporter.render(
                     shop = context.shop,
                     sale = sale,
@@ -106,8 +112,10 @@ fun OperationsPage(context: ShopContext) {
                             lineTotal = item.lineTotal
                         )
                     },
-                    customerName = customers.firstOrNull { it.id == sale.customerId }?.name,
-                    duplicate = true
+                    payments = restoredPayments,
+                    // Do not misidentify the person exporting an old receipt as its original cashier.
+                    cashierLabel = null,
+                    paperWidth = prefs.getInt("paper_width", receiptSettings.printerPaperWidthMm)
                 )
             }.onSuccess { bytes ->
                 runCatching {
@@ -121,7 +129,10 @@ fun OperationsPage(context: ShopContext) {
                             receiptNotice = "PDF ready to share."
                         }
                         "print" -> {
-                            ReceiptPdfExporter.print(androidContext, bytes, sale.saleNumber)
+                            ReceiptPdfExporter.print(
+                                androidContext, bytes, sale.saleNumber,
+                                prefs.getInt("paper_width", receiptSettings.printerPaperWidthMm)
+                            )
                             receiptNotice = "Android print dialog opened. Select a printer or Save as PDF."
                         }
                     }
@@ -334,7 +345,7 @@ fun OperationsPage(context: ShopContext) {
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) }
             )
             Text(
-                "Original receipts can be saved as permanent A4 PDFs, shared, or printed again. Saved PDFs work offline.",
+                "Receipt PDF matches the 58mm/80mm thermal printout (same layout, spacing and totals). Saved PDFs work offline.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
