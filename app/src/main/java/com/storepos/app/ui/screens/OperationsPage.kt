@@ -1,5 +1,7 @@
 package com.storepos.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,6 +17,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.RetailOpsRepository
+import com.storepos.app.printing.PdfReceiptLine
+import com.storepos.app.printing.ReceiptPdfExporter
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -27,6 +32,13 @@ import java.time.LocalDate
 fun OperationsPage(context: ShopContext) {
     var shifts by remember { mutableStateOf<List<CashierShift>>(emptyList()) }
     var sales by remember { mutableStateOf<List<Sale>>(emptyList()) }
+    var receiptSettings by remember(context.shop.id) {
+        mutableStateOf(ShopSettings(shopId = context.shop.id))
+    }
+    var receiptSearch by remember { mutableStateOf("") }
+    var pdfBusy by remember { mutableStateOf<String?>(null) }
+    var receiptNotice by remember { mutableStateOf<String?>(null) }
+    var pendingReceiptPdf by remember { mutableStateOf<Pair<String, ByteArray>?>(null) }
     var appointments by remember { mutableStateOf<List<Appointment>>(emptyList()) }
     var warranties by remember { mutableStateOf<List<Warranty>>(emptyList()) }
     var claims by remember { mutableStateOf<List<WarrantyClaim>>(emptyList()) }
@@ -56,6 +68,82 @@ fun OperationsPage(context: ShopContext) {
     val offlineStore = remember { OfflineStore(androidContext) }
     val prefs = remember { androidContext.getSharedPreferences("motopos_settings", 0) }
 
+    val receiptPdfSaver = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val pending = pendingReceiptPdf
+        pendingReceiptPdf = null
+        if (uri != null && pending != null) {
+            runCatching { ReceiptPdfExporter.save(androidContext, uri, pending.second) }
+                .onSuccess {
+                    receiptNotice = "PDF saved. Open it from Files to print again anytime, even after the digital link expires."
+                }
+                .onFailure { error = "Could not save PDF: " + (it.localizedMessage ?: "Storage failed") }
+        }
+    }
+
+    fun handleReceiptPdf(sale: Sale, action: String) {
+        if (pdfBusy != null) return
+        pdfBusy = sale.id
+        receiptNotice = null
+        error = null
+        scope.launch {
+            runCatching {
+                val soldItems = StoreRepository.saleItems(sale.id)
+                require(soldItems.isNotEmpty()) {
+                    "Original sale items are unavailable. No incomplete receipt was generated."
+                }
+                ReceiptPdfExporter.render(
+                    shop = context.shop,
+                    sale = sale,
+                    settings = receiptSettings,
+                    lines = soldItems.map { item ->
+                        PdfReceiptLine(
+                            name = item.itemName,
+                            sku = item.sku,
+                            quantity = item.quantity,
+                            unitPrice = item.unitPrice,
+                            lineTotal = item.lineTotal
+                        )
+                    },
+                    customerName = customers.firstOrNull { it.id == sale.customerId }?.name,
+                    duplicate = true
+                )
+            }.onSuccess { bytes ->
+                runCatching {
+                    when (action) {
+                        "save" -> {
+                            pendingReceiptPdf = sale.saleNumber to bytes
+                            receiptPdfSaver.launch(ReceiptPdfExporter.fileName(sale.saleNumber))
+                        }
+                        "share" -> {
+                            ReceiptPdfExporter.share(androidContext, bytes, sale.saleNumber)
+                            receiptNotice = "PDF ready to share."
+                        }
+                        "print" -> {
+                            ReceiptPdfExporter.print(androidContext, bytes, sale.saleNumber)
+                            receiptNotice = "Android print dialog opened. Select a printer or Save as PDF."
+                        }
+                    }
+                }.onFailure { error = "Receipt action failed: " + (it.localizedMessage ?: "Please try again") }
+                if (action == "print" && error == null) {
+                    runCatching {
+                        RetailOpsRepository.recordReceiptReprint(
+                            context.shop.id, sale.id, "Android PDF receipt print requested"
+                        )
+                    }.onFailure {
+                        receiptNotice = "Print dialog opened, but reprint audit could not sync: " +
+                            StoreRepository.userMessage(it)
+                    }
+                }
+            }.onFailure {
+                error = "Unable to load original receipt: " + StoreRepository.userMessage(it)
+            }
+            pdfBusy = null
+        }
+    }
+
+
     suspend fun refresh() = coroutineScope {
         val s1 = async { StoreRepository.cashierShifts(context.shop.id) }
         val s2 = async { StoreRepository.sales(context.shop.id) }
@@ -67,6 +155,7 @@ fun OperationsPage(context: ShopContext) {
         val s8 = async { StoreRepository.customers(context.shop.id) }
         val s9 = async { StoreRepository.motorcycles(context.shop.id) }
         val s10 = async { StoreRepository.serviceReminders(context.shop.id) }
+        val s11 = async { StoreRepository.shopSettings(context.shop.id) }
         shifts = s1.await()
         sales = s2.await()
         appointments = s3.await()
@@ -77,6 +166,7 @@ fun OperationsPage(context: ShopContext) {
         customers = s8.await()
         motorcycles = s9.await()
         reminders = s10.await()
+        receiptSettings = s11.await()
     }
 
     LaunchedEffect(context.shop.id) {
@@ -88,7 +178,11 @@ fun OperationsPage(context: ShopContext) {
 
     val openShift = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
     val managerRole = context.member.role.lowercase() in listOf("owner", "admin", "manager")
-    val activeSales = sales.filter { it.status == "completed" }.take(20)
+    val activeSales = sales.filter {
+        it.status == "completed" &&
+            (receiptSearch.isBlank() || it.saleNumber.contains(receiptSearch.trim(), ignoreCase = true) ||
+                (it.createdAt ?: "").contains(receiptSearch.trim(), ignoreCase = true))
+    }
     val upcoming = appointments.filter { it.status !in listOf("completed","cancelled","no_show") }.take(12)
     val openReceivables = receivables.filter { it.status in listOf("open","partial") }
 
@@ -229,9 +323,27 @@ fun OperationsPage(context: ShopContext) {
             }
         }
 
-        item { Text("Sales Aftercare", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        item { Text("Receipts & Sales Aftercare", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        item {
+            OutlinedTextField(
+                value = receiptSearch,
+                onValueChange = { receiptSearch = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Search receipt / sale number or date") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) }
+            )
+            Text(
+                "Original receipts can be saved as permanent A4 PDFs, shared, or printed again. Saved PDFs work offline.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        receiptNotice?.let {
+            item { Text(it, color = MaterialTheme.colorScheme.primary) }
+        }
         if (activeSales.isEmpty()) {
-            item { EmptyView("No completed sales", "Completed sales appear here for protected return or void actions.") }
+            item { EmptyView("No matching completed sales", "Try another receipt number or date.") }
         } else {
             items(activeSales, key = { it.id }) { sale ->
                 MotoCard(Modifier.fillMaxWidth()) {
@@ -241,6 +353,41 @@ fun OperationsPage(context: ShopContext) {
                             Text(sale.createdAt ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Text(money(sale.totalAmount), fontWeight = FontWeight.Black)
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedButton(
+                            onClick = { handleReceiptPdf(sale, "save") },
+                            enabled = pdfBusy == null,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.PictureAsPdf, contentDescription = null)
+                            Spacer(Modifier.width(3.dp))
+                            Text("Save PDF", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { handleReceiptPdf(sale, "share") },
+                            enabled = pdfBusy == null,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Share, contentDescription = null)
+                            Spacer(Modifier.width(3.dp))
+                            Text("Share", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { handleReceiptPdf(sale, "print") },
+                            enabled = pdfBusy == null,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Print, contentDescription = null)
+                            Spacer(Modifier.width(3.dp))
+                            Text("Print PDF", maxLines = 1)
+                        }
+                    }
+                    if (pdfBusy == sale.id) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.End)) {
                         OutlinedButton(onClick = {
