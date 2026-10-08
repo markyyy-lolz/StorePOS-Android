@@ -35,3 +35,10 @@ Initial retail release.
 - Cashier operations and returns
 - Reports and offline sale queue
 - Branches, stock transfers, alerts, support and licensing
+
+
+## StorePOS Android v1.6.4
+- Fixed PDF/thermal mismatch by decoding and rendering the same ESC/POS print stream.
+- Correct 58mm/80mm receipt-width PDFs, with matching QR, line order, spacing and header/footer.
+- Historical receipts include saved payment methods, amounts and references.
+- No changes to physical ESC/POS print data.
