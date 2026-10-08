@@ -3,7 +3,6 @@ package com.storepos.app.printing
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -18,15 +17,21 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import androidx.core.content.FileProvider
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.storepos.app.data.model.CartLine
+import com.storepos.app.data.model.CheckoutPayment
+import com.storepos.app.data.model.Product
 import com.storepos.app.data.model.Sale
 import com.storepos.app.data.model.Shop
 import com.storepos.app.data.model.ShopSettings
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 
-/** Historical receipts use the saved transaction's price, not today's catalog price. */
 data class PdfReceiptLine(
     val name: String,
     val sku: String?,
@@ -35,146 +40,165 @@ data class PdfReceiptLine(
     val lineTotal: Double
 )
 
+/**
+ * Pixel-independent, receipt-width PDF of the SAME ESC/POS payload that the
+ * Bluetooth/USB printer receives.  No second PDF receipt template exists.
+ */
 object ReceiptPdfExporter {
     fun fileName(receiptNumber: String): String =
         "StorePOS-Receipt-" + receiptNumber.replace(Regex("[^A-Za-z0-9_-]"), "_").take(60) + ".pdf"
-
-    private fun php(value: Double) = "PHP " + String.format(Locale.US, "%,.2f", value)
-    private fun qty(value: Double) =
-        if (value % 1.0 == 0.0) value.toLong().toString()
-        else String.format(Locale.US, "%.3f", value).trimEnd('0').trimEnd('.')
 
     fun render(
         shop: Shop,
         sale: Sale,
         settings: ShopSettings,
         lines: List<PdfReceiptLine>,
-        customerName: String? = null,
-        paymentSummary: String? = null,
-        duplicate: Boolean = true
+        payments: List<CheckoutPayment> = emptyList(),
+        cashierLabel: String? = null,
+        digitalReceiptUrl: String? = null,
+        paperWidth: Int = settings.printerPaperWidthMm
     ): ByteArray {
-        require(lines.isNotEmpty()) { "Cannot generate a receipt without its saved sale items." }
-        require(sale.shopId == shop.id) { "This sale does not belong to the selected shop." }
+        require(lines.isNotEmpty()) { "Cannot export a PDF without the original sale items." }
+        require(sale.shopId == shop.id) { "Receipt does not belong to this store." }
+        require(paperWidth == 58 || paperWidth == 80) { "Choose 58mm or 80mm receipt paper." }
+
+        // Adapter only: the exact official thermal receipt formatter handles
+        // line order, prices, tax, discounts, tender, footer and QR codes.
+        val cart = lines.mapIndexed { index, entry ->
+            require(entry.name.isNotBlank()) { "Receipt item name cannot be empty." }
+            CartLine(
+                product = Product(
+                    id = "pdf-item-" + index,
+                    shopId = shop.id,
+                    sku = entry.sku.orEmpty(),
+                    name = entry.name,
+                    sellingPrice = entry.unitPrice
+                ),
+                quantity = entry.quantity,
+                unitPriceOverride = entry.unitPrice
+            )
+        }
+
+        val samePrinterBytes = BluetoothReceiptPrinter.saleReceipt(
+            shopName = shop.name,
+            sale = sale,
+            cart = cart,
+            paperWidth = paperWidth,
+            receiptHeader = settings.receiptHeader,
+            receiptFooter = settings.receiptFooter,
+            payments = payments,
+            cashierLabel = if (settings.receiptShowCashier) cashierLabel else null,
+            openCashDrawer = false, // Nonvisual hardware command.
+            digitalReceiptUrl = digitalReceiptUrl,
+            shopAddress = shop.address,
+            shopPhone = shop.phone,
+            shopTin = shop.tin,
+            receiptTitle = settings.receiptTitle,
+            showAddress = settings.receiptShowAddress,
+            showPhone = settings.receiptShowPhone,
+            showTin = settings.receiptShowTin,
+            showReceiptNumber = settings.receiptShowReceiptNumber,
+            showDate = settings.receiptShowDate,
+            showPaymentReference = settings.receiptShowPaymentReference,
+            showDigitalQr = settings.receiptShowDigitalQr,
+            compactMode = settings.receiptCompactMode,
+            sectionOrder = settings.receiptSectionOrder
+        )
+        return renderThermalBytes(samePrinterBytes, paperWidth)
+    }
+
+    /** An exact thermal stream may also be sent directly for parity tests. */
+    internal fun renderThermalBytes(bytes: ByteArray, paperWidth: Int): ByteArray {
+        require(paperWidth == 58 || paperWidth == 80) { "Unsupported receipt paper width." }
+        val elements = ThermalReceiptDecoder.decode(bytes)
+        require(elements.isNotEmpty()) { "Receipt was empty." }
+
+        // PDF pages have the selected physical roll width, not A4 dimensions.
+        val pageWidth = (paperWidth * 72f / 25.4f).roundToInt()
+        val columns = if (paperWidth == 58) 32 else 48
+        val margin = if (paperWidth == 58) 7f else 8f
+        val contentWidth = pageWidth - 2 * margin
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
+            color = Color.BLACK
+            textSize = 9f
+            textSize *= contentWidth / (columns * measureText("0"))
+        }
+        val charWidth = paint.measureText("0")
+        val lineHeight = ceil(paint.textSize * 1.2f)
+        val maxPageHeight = 4096f // Long receipts become multiple narrow pages.
+        val qrHints = mapOf(EncodeHintType.MARGIN to 0, EncodeHintType.CHARACTER_SET to "UTF-8")
+        val qrSizes = elements.map { element ->
+            if (element is ThermalReceiptElement.QrCode) {
+                val matrix = QRCodeWriter().encode(element.content, BarcodeFormat.QR_CODE, 1, 1, qrHints)
+                (matrix.width * (if (paperWidth == 58) 4f else 6f) * 72f / 203f)
+                    .coerceAtMost(contentWidth)
+            } else 0f
+        }
+
+        fun blockHeight(index: Int): Float =
+            if (elements[index] is ThermalReceiptElement.Text) lineHeight else qrSizes[index] + lineHeight
+
+        val pages = mutableListOf<List<Int>>()
+        var current = mutableListOf<Int>()
+        var usedHeight = 0f
+        elements.indices.forEach { index ->
+            val block = blockHeight(index)
+            if (current.isNotEmpty() && usedHeight + block + margin * 2 > maxPageHeight) {
+                pages += current
+                current = mutableListOf()
+                usedHeight = 0f
+            }
+            current += index
+            usedHeight += block
+        }
+        if (current.isNotEmpty()) pages += current
+
         val document = PdfDocument()
-        val width = 595
-        val height = 842
-        val margin = 42f
-        val right = width - margin
-        val usableWidth = width - margin * 2
-        val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(30, 41, 59); textSize = 11f }
-        val muted = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(100, 116, 139); textSize = 10f }
-        val heading = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(15, 23, 42)
-            textSize = 19f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-        val heavy = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(15, 23, 42)
-            textSize = 11f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(13, 148, 136)
-            textSize = 11f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-        val rule = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(226, 232, 240)
-            strokeWidth = 1f
-        }
-        lateinit var page: PdfDocument.Page
-        lateinit var canvas: Canvas
-        var pageNo = 0
-        var y = margin
-        fun finishPage() {
-            canvas.drawLine(margin, height - 45f, right, height - 45f, rule)
-            canvas.drawText("Powered by StorePOS  |  PDF receipt copy  |  Page " + pageNo, margin, height - 30f, muted)
-            document.finishPage(page)
-        }
-        fun nextPage() {
-            if (pageNo > 0) finishPage()
-            pageNo++
-            page = document.startPage(PdfDocument.PageInfo.Builder(width, height, pageNo).create())
-            canvas = page.canvas
-            canvas.drawColor(Color.WHITE)
-            y = margin
-            if (pageNo > 1) {
-                canvas.drawText((shop.name + "  |  " + sale.saleNumber + "  (continued)").take(75), margin, y + 13f, heavy)
-                y += 30f
-            }
-        }
-        fun ensure(required: Float) {
-            if (y + required > height - 66f) nextPage()
-        }
-        fun line() {
-            ensure(18f)
-            canvas.drawLine(margin, y + 8f, right, y + 8f, rule)
-            y += 20f
-        }
-        fun wrapped(value: String, paint: Paint = ink, maxWidth: Float = usableWidth, leading: Float = 15f) {
-            var remainder = value.trim().replace(Regex("\\s+"), " ")
-            while (remainder.isNotEmpty()) {
-                var count = paint.breakText(remainder, true, maxWidth, null).coerceAtLeast(1)
-                if (count < remainder.length) {
-                    val whitespace = remainder.lastIndexOf(' ', count - 1)
-                    if (whitespace > 0) count = whitespace
-                }
-                ensure(leading)
-                canvas.drawText(remainder.take(count).trim(), margin, y + leading - 3f, paint)
-                y += leading
-                remainder = remainder.drop(count).trimStart()
-            }
-        }
-        fun amount(label: String, value: String, bold: Boolean = false) {
-            ensure(23f)
-            canvas.drawText(label, margin, y + 13f, if (bold) heavy else ink)
-            val paint = if (bold) accent else ink
-            canvas.drawText(value, right - paint.measureText(value), y + 13f, paint)
-            y += 23f
-        }
         try {
-            nextPage()
-            wrapped(shop.name, heading, usableWidth, 25f)
-            if (settings.receiptShowAddress) shop.address?.let { wrapped(it, muted) }
-            if (settings.receiptShowPhone) shop.phone?.let { wrapped("Contact: " + it, muted) }
-            if (settings.receiptShowTin) shop.tin?.let { wrapped("TIN: " + it, muted) }
-            settings.receiptHeader?.takeIf { it.isNotBlank() }?.lineSequence()?.forEach { wrapped(it, muted) }
-            y += 14f
-            wrapped(settings.receiptTitle.ifBlank { "SALES RECEIPT" }, heavy)
-            wrapped("NOT AN OFFICIAL TAX RECEIPT", muted)
-            if (duplicate) wrapped("DUPLICATE COPY - PDF EXPORT", accent)
-            line()
-            wrapped("Receipt no.: " + sale.saleNumber, heavy)
-            sale.createdAt?.let { wrapped("Sale date: " + it.replace("T", " ").take(19), muted) }
-            customerName?.takeIf { it.isNotBlank() }?.let { wrapped("Customer: " + it) }
-            wrapped("Status: " + sale.status.uppercase(Locale.US), muted)
-            line()
-            wrapped("PURCHASED ITEMS", heavy)
-            y += 5f
-            lines.forEach { item ->
-                wrapped(item.name, heavy, usableWidth * 0.86f)
-                if (!item.sku.isNullOrBlank()) wrapped("SKU: " + item.sku, muted)
-                amount(qty(item.quantity) + " x " + php(item.unitPrice), php(item.lineTotal))
-                y += 4f
+            pages.forEachIndexed { pageIndex, indices ->
+                val height = (indices.sumOf { blockHeight(it).toDouble() }.toFloat() + margin * 2)
+                    .roundToInt().coerceAtLeast(40)
+                val page = document.startPage(
+                    PdfDocument.PageInfo.Builder(pageWidth, height, pageIndex + 1).create()
+                )
+                val canvas = page.canvas
+                canvas.drawColor(Color.WHITE)
+                var y = margin
+                indices.forEach { index ->
+                    when (val element = elements[index]) {
+                        is ThermalReceiptElement.Text -> {
+                            // No reflow, extra fields, extra footers or altered spacing.
+                            canvas.drawText(element.line, margin, y + paint.textSize, paint)
+                            y += lineHeight
+                        }
+                        is ThermalReceiptElement.QrCode -> {
+                            val matrix = QRCodeWriter().encode(
+                                element.content, BarcodeFormat.QR_CODE, 1, 1, qrHints
+                            )
+                            val side = qrSizes[index]
+                            val module = side / matrix.width
+                            val left = (pageWidth - side) / 2f
+                            val pixels = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
+                            for (row in 0 until matrix.height) {
+                                for (col in 0 until matrix.width) {
+                                    if (matrix.get(col, row)) {
+                                        canvas.drawRect(
+                                            left + col * module, y + row * module,
+                                            left + (col + 1) * module, y + (row + 1) * module, pixels
+                                        )
+                                    }
+                                }
+                            }
+                            y += side + lineHeight
+                        }
+                    }
+                }
+                document.finishPage(page)
             }
-            line()
-            amount("Subtotal", php(sale.subtotal))
-            if (sale.discountAmount > 0) amount("Discount", "- " + php(sale.discountAmount))
-            if (sale.taxAmount > 0) amount("Tax", php(sale.taxAmount))
-            amount("TOTAL", php(sale.totalAmount), true)
-            line()
-            paymentSummary?.takeIf { it.isNotBlank() }?.let { wrapped("Payment: " + it) }
-            sale.amountTendered?.let { amount("Amount tendered", php(it)) }
-            sale.changeDue?.takeIf { it > 0 }?.let { amount("Change", php(it)) }
-            y += 12f
-            val footer = settings.receiptFooter?.takeIf { it.isNotBlank() }
-            if (footer != null) footer.lineSequence().forEach { wrapped(it, muted) }
-            else wrapped("Thank you for your purchase.", muted)
-            wrapped("For refunds or adjustments, check the latest StorePOS sale record.", muted)
-            finishPage()
-            return ByteArrayOutputStream().use { output ->
-                document.writeTo(output)
-                output.toByteArray()
+            return ByteArrayOutputStream().use { stream ->
+                document.writeTo(stream)
+                stream.toByteArray()
             }
         } finally {
             document.close()
@@ -183,7 +207,7 @@ object ReceiptPdfExporter {
 
     fun save(context: Context, uri: Uri, bytes: ByteArray) {
         context.contentResolver.openOutputStream(uri, "w")?.use { it.write(bytes) }
-            ?: error("Unable to open the selected document location.")
+            ?: error("Cannot open the selected PDF destination.")
     }
 
     fun share(context: Context, bytes: ByteArray, receiptNumber: String) {
@@ -197,10 +221,11 @@ object ReceiptPdfExporter {
             clipData = ClipData.newUri(context.contentResolver, "StorePOS receipt", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "Share receipt PDF"))
+        context.startActivity(Intent.createChooser(intent, "Share thermal-size receipt PDF"))
     }
 
-    fun print(context: Context, bytes: ByteArray, receiptNumber: String) {
+    fun print(context: Context, bytes: ByteArray, receiptNumber: String, paperWidth: Int = 80) {
+        require(paperWidth == 58 || paperWidth == 80)
         val manager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
         val adapter = object : PrintDocumentAdapter() {
             override fun onLayout(
@@ -237,11 +262,20 @@ object ReceiptPdfExporter {
                 }
             }
         }
+        val paperWidthMils = (paperWidth * 1000f / 25.4f).roundToInt()
         manager.print(
             fileName(receiptNumber), adapter,
             PrintAttributes.Builder()
-                .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
+                .setMediaSize(
+                    PrintAttributes.MediaSize(
+                        "STOREPOS_" + paperWidth + "MM",
+                        paperWidth.toString() + "mm receipt roll",
+                        paperWidthMils,
+                        11000 // Service may substitute its supported roll paper height.
+                    )
+                )
+                .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                .setColorMode(PrintAttributes.COLOR_MODE_MONOCHROME)
                 .build()
         )
     }
