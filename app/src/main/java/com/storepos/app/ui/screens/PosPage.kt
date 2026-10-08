@@ -167,9 +167,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     lineTotal = line.lineTotal
                 )
             },
-            customerName = customers.firstOrNull { it.id == sale.customerId }?.name,
-            paymentSummary = lastPayments.joinToString(", ") { it.method.replace("_", " ").uppercase() },
-            duplicate = true
+            payments = lastPayments,
+            cashierLabel = StoreRepository.currentUserEmail() ?: context.member.role,
+            digitalReceiptUrl = lastReceiptToken?.let {
+                "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
+            },
+            paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm)
         )
 
     val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
