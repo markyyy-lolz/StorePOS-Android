@@ -1,3 +1,24 @@
+# StorePOS Android v1.6.4 — Thermal-matched PDF Receipts
+
+## One receipt, two outputs
+- Saved PDF now uses the same ESC/POS print data as Bluetooth/USB printers, instead of a separate A4 design.
+- Physical PDF width follows the selected 58mm/80mm paper size (32/48 columns).
+- Item names, prices, header, footer, tax, totals, section order and receipt QR content match the thermal data.
+- Historical receipts fetch recorded payment methods, amounts and references from StorePOS Cloud.
+- Long receipts continue onto additional narrow pages. Saved PDFs do not expire.
+- Android print dialog uses 58mm/80mm paper-width hints, subject to printer driver support.
+- Existing direct thermal printing remains untouched.
+
+## Limitation for past transactions
+- Expired digital receipt QR tokens and the exact old cashier label may not be recoverable. No unavailable information is invented.
+- Historic PDFs use the current shop receipt design for the original sale items and recorded payments.
+
+## Compatibility
+- Android 8.0+; package com.storepos.app; version code 23.
+- No database changes, stock adjustments or changes to PayMongo payment processing.
+
+---
+
 # StorePOS Android v1.6.3 — Permanent PDF Receipt Archive
 
 ## New receipt actions
