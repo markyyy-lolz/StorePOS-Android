@@ -20,3 +20,6 @@ This release completes the StorePOS Staff Management v2 flow across StorePOS Clo
 - Version code: 21
 - Version name: 1.6.2
 - Existing shops, products, sales, customers and licenses are preserved.
+
+
+Release channel: Stable
