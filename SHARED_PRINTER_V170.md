@@ -1,6 +1,6 @@
-# StorePOS v1.7.0-rc1 — VOZY G80 Shared Printing
+# StorePOS v1.7.0 — VOZY G80 Shared Printing
 
-**Status:** release candidate, NOT hardware-approved until checked on two actual Android tablets + a VOZY G80 USB/Bluetooth printer.
+**Status:** GitHub APK distribution published; hardware acceptance remains unverified until checked on two actual Android tablets + a VOZY G80 USB/Bluetooth printer.
 
 ## Deployment (one shop, two tablets)
 1. Install the candidate APK on both tablets; sign in with active StorePOS shop members.
