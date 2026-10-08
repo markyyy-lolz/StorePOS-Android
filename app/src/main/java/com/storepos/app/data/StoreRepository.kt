@@ -9,6 +9,7 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
@@ -53,7 +54,7 @@ object StoreRepository {
         require(newPassword.length >= 8) { "Your new password must be at least 8 characters." }
         val session = client.auth.currentSessionOrNull()
             ?: error("Authentication required. Sign in again.")
-        val endpoint = BuildConfig.SUPABASE_URL.trimEnd('/') + "/functions/v1/invite-staff"
+        val endpoint = BuildConfig.SUPABASE_URL.trimEnd('/') + "/functions/v1/storepos-invite-staff"
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 12_000
@@ -195,17 +196,88 @@ object StoreRepository {
     suspend fun userProfiles(): List<UserProfile> =
         client.from("user_profiles").select().decodeList<UserProfile>()
 
-    suspend fun updateMemberRole(memberId: String, role: String, active: Boolean = true) {
-        require(role in setOf("owner", "admin", "manager", "cashier", "inventory", "mechanic")) {
-            "Unsupported StorePOS role."
+    // All StorePOS staff mutations go through the server-side authorization,
+    // license and audit checks. Do not update shop_members directly.
+    private fun executeStaffAction(payload: JsonObject) {
+        val session = client.auth.currentSessionOrNull()
+            ?: error("Authentication required. Sign in again.")
+        val endpoint = BuildConfig.SUPABASE_URL.trimEnd('/') + "/functions/v1/storepos-invite-staff"
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12_000
+            readTimeout = 25_000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer ${session.accessToken}")
+            setRequestProperty("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY)
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
         }
-        client.from("shop_members").update({
-            set("role", role)
-            set("is_active", active)
-        }) {
-            filter { eq("id", memberId) }
+        try {
+            connection.outputStream.use { stream ->
+                stream.write(payload.toString().toByteArray(Charsets.UTF_8))
+            }
+            val status = connection.responseCode
+            val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) {
+                val details = runCatching { Json.parseToJsonElement(response).jsonObject }.getOrNull()
+                val message = details?.get("error")?.jsonPrimitive?.content.orEmpty()
+                val code = details?.get("code")?.jsonPrimitive?.content.orEmpty()
+                error((message.ifBlank { "Unable to complete StorePOS staff administration." }) +
+                    (if (code.isNotBlank()) " ($code)" else ""))
+            }
+        } finally {
+            connection.disconnect()
         }
     }
+
+    suspend fun createStaffAccount(
+        shopId: String,
+        displayName: String,
+        email: String,
+        temporaryPassword: String,
+        role: String
+    ) = withContext(Dispatchers.IO) {
+        require(role in setOf("cashier", "manager", "inventory")) { "Unsupported StorePOS staff role." }
+        require(displayName.isNotBlank() && email.contains('@')) { "A full name and valid email are required." }
+        require(temporaryPassword.length >= 8) { "Temporary password must be at least 8 characters." }
+        executeStaffAction(buildJsonObject {
+            put("action", "create")
+            put("shop_id", shopId)
+            put("display_name", displayName.trim())
+            put("email", email.trim())
+            put("password", temporaryPassword)
+            put("role", role)
+        })
+    }
+
+    suspend fun updateMemberRole(memberId: String, role: String, active: Boolean = true) =
+        withContext(Dispatchers.IO) {
+            val member = client.from("shop_members").select {
+                filter { eq("id", memberId) }
+            }.decodeList<ShopMember>().firstOrNull()
+                ?: error("Staff membership could not be found. Refresh and try again.")
+
+            if (role != member.role) {
+                require(role in setOf("manager", "cashier", "inventory")) {
+                    "Only Manager, Cashier and Inventory roles are allowed."
+                }
+                executeStaffAction(buildJsonObject {
+                    put("action", "update_role")
+                    put("shop_id", member.shopId)
+                    put("user_id", member.userId)
+                    put("role", role)
+                })
+            }
+            if (active != member.isActive) {
+                executeStaffAction(buildJsonObject {
+                    put("action", "set_active")
+                    put("shop_id", member.shopId)
+                    put("user_id", member.userId)
+                    put("active", active)
+                })
+            }
+        }
 
     suspend fun deviceSessions(shopId: String): List<DeviceSession> =
         client.from("device_sessions").select {
