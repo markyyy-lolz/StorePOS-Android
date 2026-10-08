@@ -1,3 +1,24 @@
+# StorePOS Android v1.6.3 — Permanent PDF Receipt Archive
+
+## New receipt actions
+- After completed checkout: **Save PDF** and **Share PDF**, alongside existing Bluetooth/USB thermal printing.
+- Operations > Receipts & Sales Aftercare: search by receipt number or date, then **Save PDF**, **Share**, or **Print PDF** from recorded sales.
+- Uses the original sale item snapshots and original sold prices, not current catalog pricing.
+- A4 multi-page PDF with shop identity, itemized quantities, discounts, tax, payment summary where available, and sale number.
+- Explicit **duplicate copy** and **not an official tax receipt** labeling; receipts generated from sales history are for recordkeeping and do not change payment or inventory state.
+- Android's Storage Access Framework saves PDF to a user-selected destination (including device files or a connected document provider) without broad storage permissions.
+- Share PDFs securely using scoped temporary FileProvider access.
+- Android system Print dialog prints historical PDF copies; the print request is submitted to the existing StorePOS receipt reprint audit.
+
+## Compatibility
+- Android 8.0+; application ID com.storepos.app.
+- Version code: 22; version name: 1.6.3.
+- Existing Supabase transactions, PayMongo integration, stock, shop data and digital receipts remain unchanged.
+- PDF files saved to the device remain available without internet access. Historical PDF generation requires the saved sale items to be retrievable from StorePOS Cloud.
+- Print output availability depends on installed Android print services; 58mm/80mm ESC/POS printing continues to use the existing direct printing path.
+
+---
+
 # StorePOS v1.6.2 — Staff First-Login Security
 
 This release completes the StorePOS Staff Management v2 flow across StorePOS Cloud and Android.

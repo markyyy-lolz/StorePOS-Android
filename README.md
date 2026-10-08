@@ -109,3 +109,10 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Enforces a required password change for newly created StorePOS staff accounts before Android workspace access.
 - Uses the live StorePOS `invite-staff` Edge Function v4 for authenticated password changes.
 - Keeps existing linked-user passwords intact and preserves all StorePOS data.
+
+
+## v1.6.3 — PDF Receipt Archive
+- Save permanent A4 receipt PDF from checkout or searchable Operations sales history.
+- Share PDFs via Android's secure share sheet and print historical PDFs via system print services.
+- Original recorded sale-item snapshots; duplicate-copy watermark and multi-page item list.
+- Device-saved PDFs remain printable offline; fetching an unsaved historical receipt requires cloud access.

@@ -1,3 +1,8 @@
+## Android v1.6.3 — PDF Receipt Archive
+- Added Save/Share PDF to successful checkout; searchable receipt history with Save/Share/Print PDF.
+- Uses immutable sold-item details, A4 pagination, Android document picker and secure FileProvider.
+- Kept original thermal printing and cloud sales untouched.
+
 # Changelog
 
 ## v1.4.1
