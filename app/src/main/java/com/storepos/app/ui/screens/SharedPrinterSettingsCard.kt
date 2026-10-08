@@ -33,10 +33,12 @@ fun SharedPrinterSettingsCard(shopContext: ShopContext) {
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var recoveryJob by remember { mutableStateOf<String?>(null) }
+    var localPending by remember { mutableIntStateOf(0) }
     var recoveryReason by remember { mutableStateOf("Checked paper output before recovery") }
 
     suspend fun refresh() {
         snapshot = repo.snapshot(shopContext.shop.id)
+        localPending = com.storepos.app.printing.SharedPrintOutbox.count(androidContext,shopContext.shop.id)
     }
 
     LaunchedEffect(shopContext.shop.id) {
@@ -62,7 +64,22 @@ fun SharedPrinterSettingsCard(shopContext: ShopContext) {
         Text("Printer: " + (printer?.name ?: "Not configured") + " • 80mm • " +
             (if (online) "HOST ONLINE" else "HOST OFFLINE"),
             style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-        Text("Pending jobs: " + queued + " • Selected mode: " + mode.uppercase())
+        Text("Cloud pending: " + queued + " • Device pending: " + localPending)
+        Text("Selected mode: " + mode.uppercase())
+        if (localPending > 0) {
+            OutlinedButton(onClick = {
+                busy = true
+                scope.launch {
+                    runCatching {
+                        val uploaded = com.storepos.app.printing.SharedPrintOutbox.flush(
+                            androidContext,shopContext.shop.id)
+                        refresh()
+                        message = uploaded.toString() + " locally pending print(s) uploaded."
+                    }.onFailure { message = it.message }
+                    busy = false
+                }
+            },enabled = !busy) { Text("Sync pending receipts") }
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(mode == "direct", onClick = {
