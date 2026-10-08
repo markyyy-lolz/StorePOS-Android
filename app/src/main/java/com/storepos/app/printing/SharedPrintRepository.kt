@@ -15,6 +15,8 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
 import java.util.UUID
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 
 @Serializable
 data class SharedPrinter(
@@ -141,5 +143,71 @@ object SharedPrintRepository {
             receiptNumber?.let { put("receipt_number", it) }
         })
         return result["job_id"]?.toString()?.trim('"') ?: error("Print queue did not return a job ID")
+    }
+}
+
+
+/** Persist-before-retry outbox on the remote cashier tablet. No sale writes. */
+@Serializable
+data class PendingSharedPrint(
+    val shopId: String,
+    val deviceId: String,
+    val requestKey: String,
+    val kind: String,
+    val saleId: String?,
+    val receiptNumber: String?,
+    val payloadBase64: String
+)
+
+object SharedPrintOutbox {
+    private val json = Json { ignoreUnknownKeys = true }
+    private const val key = "storepos_pending_shared_print_jobs"
+    private fun prefs(context: Context) =
+        context.getSharedPreferences("storepos_print_outbox",Context.MODE_PRIVATE)
+
+    @Synchronized private fun all(context: Context): List<PendingSharedPrint> =
+        runCatching {
+            json.decodeFromString<List<PendingSharedPrint>>(
+                prefs(context).getString(key,"[]") ?: "[]"
+            )
+        }.getOrDefault(emptyList())
+
+    @Synchronized fun count(context: Context, shopId: String): Int =
+        all(context).count { it.shopId == shopId }
+
+    @Synchronized fun save(context: Context, job: PendingSharedPrint) {
+        val old = all(context)
+        if (old.any { it.shopId == job.shopId && it.requestKey == job.requestKey }) return
+        require(old.size < 100) { "Local print queue full (100). Reconnect or recover pending jobs." }
+        check(prefs(context).edit().putString(key,json.encodeToString(old + job)).commit()) {
+            "Could not save receipt to local print outbox"
+        }
+    }
+
+    @Synchronized private fun remove(context: Context, job: PendingSharedPrint) {
+        val remaining = all(context).filterNot {
+            it.shopId == job.shopId && it.requestKey == job.requestKey
+        }
+        check(prefs(context).edit().putString(key,json.encodeToString(remaining)).commit())
+    }
+
+    suspend fun flush(context: Context, shopId: String): Int {
+        var sent = 0
+        for (job in all(context).filter { it.shopId == shopId }) {
+            try {
+                SharedPrintRepository.enqueue(
+                    job.shopId,job.deviceId,job.kind,
+                    Base64.decode(job.payloadBase64,Base64.DEFAULT),
+                    job.requestKey,job.saleId,job.receiptNumber
+                )
+                remove(context,job)
+                sent++
+            } catch (_: Exception) {
+                // Do not drop a receipt if the network, authorization or sale sync
+                // is not ready. A later retry uses the exact same idempotency key.
+                break
+            }
+        }
+        return sent
     }
 }
