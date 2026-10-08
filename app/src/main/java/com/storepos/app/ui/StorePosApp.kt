@@ -25,6 +25,7 @@ import com.storepos.app.data.model.PlanEntitlements
 import com.storepos.app.data.model.ShopContext
 import com.storepos.app.ui.auth.AuthScreen
 import com.storepos.app.ui.auth.LicenseGateScreen
+import com.storepos.app.ui.auth.RequiredPasswordChangeScreen
 import com.storepos.app.ui.auth.SetupShopScreen
 import com.storepos.app.ui.components.LoadingView
 import kotlinx.coroutines.launch
@@ -52,6 +53,7 @@ enum class AppPage(val label: String, val icon: ImageVector) {
 private sealed interface BootState {
     data object Loading : BootState
     data object Auth : BootState
+    data class PasswordChange(val email: String?) : BootState
     data class Setup(val email: String?) : BootState
     data class LicenseGate(val context: ShopContext, val access: LicenseAccess) : BootState
     data class Ready(
@@ -86,6 +88,10 @@ fun StorePosApp() {
         val userId = StoreRepository.currentUserId()
         if (userId == null) {
             state = BootState.Auth
+            return
+        }
+        if (StoreRepository.mustChangePassword()) {
+            state = BootState.PasswordChange(StoreRepository.currentUserEmail())
             return
         }
         val context = StoreRepository.loadShopContext()
@@ -155,6 +161,38 @@ fun StorePosApp() {
                     }
 
                     busy = false
+                }
+            }
+        )
+        is BootState.PasswordChange -> RequiredPasswordChangeScreen(
+            busy = busy,
+            error = error,
+            accountEmail = current.email,
+            onSubmit = { newPassword ->
+                scope.launch {
+                    busy = true
+                    error = null
+                    notice = null
+                    runCatching {
+                        StoreRepository.changeRequiredPassword(newPassword)
+                    }.onSuccess {
+                        runCatching { StoreRepository.signOut() }
+                        notice = "Password changed. Sign in again using your new StorePOS password."
+                        state = BootState.Auth
+                    }.onFailure {
+                        error = StoreRepository.userMessage(it)
+                    }
+                    busy = false
+                }
+            },
+            onSignOut = {
+                scope.launch {
+                    busy = true
+                    runCatching { StoreRepository.signOut() }
+                    error = null
+                    notice = null
+                    busy = false
+                    state = BootState.Auth
                 }
             }
         )

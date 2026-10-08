@@ -1,5 +1,6 @@
 package com.storepos.app.data
 
+import android.util.Base64
 import com.storepos.app.BuildConfig
 import com.storepos.app.update.latestStorePosVersion
 import com.storepos.app.data.model.*
@@ -9,7 +10,11 @@ import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +30,65 @@ object StoreRepository {
 
     fun currentUserEmail(): String? =
         client.auth.currentSessionOrNull()?.user?.email
+
+    fun mustChangePassword(): Boolean {
+        val token = client.auth.currentSessionOrNull()?.accessToken ?: return false
+        return runCatching {
+            val payload = token.split('.').getOrNull(1) ?: return@runCatching false
+            val padded = payload + "=".repeat((4 - payload.length % 4) % 4)
+            val decoded = String(
+                Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                Charsets.UTF_8
+            )
+            val root = Json.parseToJsonElement(decoded).jsonObject
+            root["app_metadata"]
+                ?.jsonObject
+                ?.get("must_change_password")
+                ?.jsonPrimitive
+                ?.booleanOrNull == true
+        }.getOrDefault(false)
+    }
+
+    suspend fun changeRequiredPassword(newPassword: String) = withContext(Dispatchers.IO) {
+        require(newPassword.length >= 8) { "Your new password must be at least 8 characters." }
+        val session = client.auth.currentSessionOrNull()
+            ?: error("Authentication required. Sign in again.")
+        val endpoint = BuildConfig.SUPABASE_URL.trimEnd('/') + "/functions/v1/invite-staff"
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12_000
+            readTimeout = 25_000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer ${session.accessToken}")
+            setRequestProperty("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY)
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+
+        val payload = buildJsonObject {
+            put("action", "change_password")
+            put("new_password", newPassword)
+        }.toString()
+
+        connection.outputStream.use { stream ->
+            stream.write(payload.toByteArray(Charsets.UTF_8))
+        }
+
+        val code = connection.responseCode
+        val responseStream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val body = responseStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        connection.disconnect()
+
+        if (code !in 200..299) {
+            val message = runCatching {
+                Json.parseToJsonElement(body)
+                    .jsonObject["error"]
+                    ?.jsonPrimitive
+                    ?.content
+            }.getOrNull().orEmpty()
+            error(message.ifBlank { "Unable to change the temporary StorePOS password." })
+        }
+    }
 
     suspend fun signIn(email: String, password: String, captchaToken: String) {
         require(captchaToken.isNotBlank()) { "Security verification required. Please complete the verification and try again." }

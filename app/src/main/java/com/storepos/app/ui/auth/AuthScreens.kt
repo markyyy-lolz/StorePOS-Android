@@ -353,6 +353,142 @@ fun AuthScreen(
 }
 
 @Composable
+fun RequiredPasswordChangeScreen(
+    busy: Boolean,
+    error: String?,
+    accountEmail: String?,
+    onSubmit: (String) -> Unit,
+    onSignOut: () -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    val mismatch = confirmPassword.isNotEmpty() && password != confirmPassword
+    val valid = password.length >= 8 && password == confirmPassword
+
+    BackHandler(enabled = !busy) { onSignOut() }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.widthIn(max = 500.dp).fillMaxWidth(),
+            shape = RoundedCornerShape(30.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Image(
+                    painter = painterResource(R.drawable.storepos_brand_logo),
+                    contentDescription = "StorePOS",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 92.dp, max = 128.dp),
+                    contentScale = ContentScale.Fit
+                )
+
+                Text(
+                    "Choose your own password",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Black
+                )
+                Text(
+                    "This StorePOS staff account was created with a temporary password. Change it before opening the workspace.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (!accountEmail.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(Icons.Rounded.AccountCircle, contentDescription = null)
+                            Column {
+                                Text("Signed-in staff account", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    accountEmail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("New password") },
+                    leadingIcon = { Icon(Icons.Rounded.Lock, null) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                )
+
+                OutlinedTextField(
+                    value = confirmPassword,
+                    onValueChange = { confirmPassword = it },
+                    label = { Text("Confirm new password") },
+                    leadingIcon = { Icon(Icons.Rounded.Lock, null) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    isError = mismatch,
+                    supportingText = {
+                        when {
+                            mismatch -> Text("Passwords do not match.")
+                            password.isNotEmpty() && password.length < 8 ->
+                                Text("Use at least 8 characters.")
+                            else -> Text("Use this new password for StorePOS Cloud and Android.")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                )
+
+                if (!error.isNullOrBlank()) {
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                }
+
+                Button(
+                    onClick = { onSubmit(password) },
+                    enabled = !busy && valid,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        Text("Change password & continue", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                TextButton(
+                    onClick = onSignOut,
+                    enabled = !busy,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Icon(Icons.Rounded.Logout, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sign out")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun SetupShopScreen(
     busy: Boolean,
     error: String?,
