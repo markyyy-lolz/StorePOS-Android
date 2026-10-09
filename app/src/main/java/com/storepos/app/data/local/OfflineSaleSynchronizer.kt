@@ -22,9 +22,14 @@ data class OfflineSyncSummary(
 object OfflineSaleSynchronizer {
     private val mutex = Mutex()
 
-    suspend fun syncShop(shopId: String, store: OfflineStore): OfflineSyncSummary =
+    suspend fun syncShop(
+        shopId: String,
+        store: OfflineStore,
+        onlySaleId: String? = null
+    ): OfflineSyncSummary =
         mutex.withLock {
             val queued = store.pendingSales(shopId)
+                .filter { onlySaleId == null || it.id == onlySaleId }
             if (queued.isEmpty()) return@withLock snapshot(shopId, store, 0, false)
 
             val signedInCashier = StoreRepository.currentUserId()
