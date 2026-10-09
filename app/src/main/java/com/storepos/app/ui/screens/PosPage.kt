@@ -23,6 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -1854,15 +1857,34 @@ private fun ProductList(
     onScan: () -> Unit,
     modifier: Modifier
 ) {
+    // A Bluetooth HID / keyboard-wedge scanner types into the focused field.
+    // Focus it when entering POS, and retain focus between successful scans.
+    // Never claim the physical Bluetooth device is connected here.
+    val scanFocusRequester = remember { FocusRequester() }
+    val softwareKeyboard = LocalSoftwareKeyboardController.current
+
+    fun submitKeyboardScan(code: String) {
+        scannedCodeOrNull(code)?.let(onSubmit)
+        scanFocusRequester.requestFocus()
+        softwareKeyboard?.hide()
+    }
+
+    LaunchedEffect(Unit) {
+        scanFocusRequester.requestFocus()
+        softwareKeyboard?.hide()
+    }
+
     LaunchedEffect(query, products) {
         val candidate = query.trim()
         if (candidate.length >= 6) {
-            delay(160)
+            // Scanner types quickly; the debounce also supports models whose
+            // Enter/Tab suffix has been disabled in the scanner's firmware.
+            delay(200)
             val exactMatch = products.any {
                 it.barcode.equals(candidate, ignoreCase = true) ||
                     it.sku.equals(candidate, ignoreCase = true)
             }
-            if (exactMatch) onSubmit(candidate)
+            if (exactMatch) submitKeyboardScan(candidate)
         }
     }
 
@@ -1870,17 +1892,24 @@ private fun ProductList(
         OutlinedTextField(
             value = query,
             onValueChange = { rawValue ->
-                val hasScannerTerminator = rawValue.any { it == '\n' || it == '\r' }
-                val cleaned = rawValue.replace("\n", "").replace("\r", "")
-                onQuery(cleaned)
-                if (hasScannerTerminator && cleaned.isNotBlank()) onSubmit(cleaned)
+                val update = parseHidScannerText(rawValue)
+                onQuery(update.searchText)
+                update.completedCode?.let(::submitKeyboardScan)
             },
             modifier = Modifier
                 .fillMaxWidth()
+                .focusRequester(scanFocusRequester)
                 .onPreviewKeyEvent { keyEvent ->
-                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Enter) {
-                        val code = query.trim()
-                        if (code.isNotBlank()) onSubmit(code)
+                    // Some Bluetooth scanners send ENTER, TAB or ESCAPE after
+                    // the barcode. Consume both Down and Up so these suffixes
+                    // cannot jump focus or navigate away from the POS register.
+                    val suffix = keyEvent.key == Key.Enter ||
+                        keyEvent.key == Key.Tab ||
+                        keyEvent.key == Key.Escape
+                    if (suffix) {
+                        if (keyEvent.type == KeyEventType.KeyDown) {
+                            submitKeyboardScan(query)
+                        }
                         true
                     } else {
                         false
@@ -1888,10 +1917,22 @@ private fun ProductList(
                 },
             singleLine = true,
             placeholder = { Text("Search name, SKU, barcode or brand") },
+            supportingText = { Text("Bluetooth HID: scan repeatedly · Enter/Tab suffix supported") },
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
             trailingIcon = {
-                IconButton(onClick = onScan) {
-                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan barcode")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = {
+                            onQuery("")
+                            scanFocusRequester.requestFocus()
+                            softwareKeyboard?.hide()
+                        }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Clear scanner search")
+                        }
+                    }
+                    IconButton(onClick = onScan) {
+                        Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan with camera")
+                    }
                 }
             },
             shape = RoundedCornerShape(16.dp)
@@ -1902,7 +1943,12 @@ private fun ProductList(
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(products, key = { it.id }) { p ->
                     Card(
-                        Modifier.fillMaxWidth().clickable { onAdd(p) },
+                        Modifier.fillMaxWidth().clickable {
+                            onAdd(p)
+                            onQuery("")
+                            scanFocusRequester.requestFocus()
+                            softwareKeyboard?.hide()
+                        },
                         shape = RoundedCornerShape(18.dp)
                     ) {
                         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
