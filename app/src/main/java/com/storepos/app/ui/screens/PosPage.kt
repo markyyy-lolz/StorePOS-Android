@@ -263,7 +263,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             ScanOptions()
                 .setPrompt("Scan product barcode")
                 .setBeepEnabled(true)
-                .setOrientationLocked(false)
+                .setOrientationLocked(true)
         )
     }
 
