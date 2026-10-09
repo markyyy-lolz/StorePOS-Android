@@ -203,8 +203,8 @@ fun InventoryPage(context: ShopContext) {
                             event.key == Key.Tab ||
                             event.key == Key.Escape
                         if (terminator) {
-                            if (event.type == KeyEventType.KeyDown && query.isNotBlank()) {
-                                setScannedInventoryCode(query.trim())
+                            if (event.type == KeyEventType.KeyDown && searchValue.text.isNotBlank()) {
+                                setScannedInventoryCode(searchValue.text.trim())
                             }
                             true
                         } else false
