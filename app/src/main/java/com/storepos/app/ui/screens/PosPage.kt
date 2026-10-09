@@ -1862,8 +1862,13 @@ private fun ProductList(
     // Never claim the physical Bluetooth device is connected here.
     val scanFocusRequester = remember { FocusRequester() }
     val softwareKeyboard = LocalSoftwareKeyboardController.current
+    // The scanner can deliver its final character and Enter in the same
+    // frame, before Compose has recomposed the query String parameter.
+    val pendingHidInput = remember { mutableStateOf(query) }
+    SideEffect { pendingHidInput.value = query }
 
     fun submitKeyboardScan(code: String) {
+        pendingHidInput.value = ""
         scannedCodeOrNull(code)?.let(onSubmit)
         scanFocusRequester.requestFocus()
         softwareKeyboard?.hide()
@@ -1893,6 +1898,7 @@ private fun ProductList(
             value = query,
             onValueChange = { rawValue ->
                 val update = parseHidScannerText(rawValue)
+                pendingHidInput.value = update.searchText
                 onQuery(update.searchText)
                 update.completedCode?.let(::submitKeyboardScan)
             },
@@ -1908,7 +1914,7 @@ private fun ProductList(
                         keyEvent.key == Key.Escape
                     if (suffix) {
                         if (keyEvent.type == KeyEventType.KeyDown) {
-                            submitKeyboardScan(query)
+                            submitKeyboardScan(pendingHidInput.value)
                         }
                         true
                     } else {
@@ -1923,6 +1929,7 @@ private fun ProductList(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (query.isNotBlank()) {
                         IconButton(onClick = {
+                            pendingHidInput.value = ""
                             onQuery("")
                             scanFocusRequester.requestFocus()
                             softwareKeyboard?.hide()
@@ -1945,6 +1952,7 @@ private fun ProductList(
                     Card(
                         Modifier.fillMaxWidth().clickable {
                             onAdd(p)
+                            pendingHidInput.value = ""
                             onQuery("")
                             scanFocusRequester.requestFocus()
                             softwareKeyboard?.hide()
