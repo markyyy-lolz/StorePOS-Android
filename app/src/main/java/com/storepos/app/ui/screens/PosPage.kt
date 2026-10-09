@@ -41,6 +41,8 @@ import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.local.OfflineSyncPolicy
+import com.storepos.app.data.local.OfflineSaleSynchronizer
+import com.storepos.app.data.local.OfflineSyncWorker
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -393,44 +395,22 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     suspend fun syncOfflineSales() {
         if (syncingOffline) return
         syncingOffline = true
-        var syncedAny = false
         try {
-            val shopId = context.shop.id
-            val pending = offlineStore.pendingSales(shopId)
-            if (pending.isEmpty()) return
-            // First reconcile against CURRENT authoritative cloud products.
-            // A recently factory-reset shop must not replay old barcodes/IDs.
-            val cloudProducts = try {
-                StoreRepository.products(shopId)
-            } catch (networkError: Throwable) {
-                offlineMode = true
-                error = "Offline sales are saved on this tablet. Sync will retry when online."
-                return
+            val summary = OfflineSaleSynchronizer.syncShop(context.shop.id, offlineStore)
+            pendingCount = summary.pending
+            needsReviewCount = summary.needsReview
+            if (summary.synced > 0) {
+                runCatching { refresh() }
             }
-            for (queued in pending) {
-                val reason = OfflineSyncPolicy.reviewReason(shopId, queued.payload, cloudProducts)
-                if (reason != null) {
-                    offlineStore.markNeedsReview(shopId, queued.id, reason)
-                    continue
-                }
-                runCatching { StoreRepository.completeOfflineSale(queued.payload) }
-                    .onSuccess {
-                        offlineStore.removePendingSale(shopId, queued.id)
-                        syncedAny = true
-                    }
-                    .onFailure { failure ->
-                        offlineStore.setPendingError(shopId, queued.id, StoreRepository.userMessage(failure))
-                    }
-            }
-            if (offlineStore.needsReview(shopId).isNotEmpty()) {
-                error = "Some offline sales need manager review (catalog, price or stock conflict). " +
-                    "These records are preserved locally and have NOT been added to cloud sales."
+            when {
+                summary.needsReview > 0 ->
+                    error = "Some offline cash sales need manager review (reset/price/stock). " +
+                        "They remain saved locally and have NOT been posted to the cloud."
+                summary.message != null -> error = summary.message
+                summary.synced > 0 -> error = null
             }
         } finally {
-            pendingCount = offlineStore.pendingSales(context.shop.id).size
-            needsReviewCount = offlineStore.needsReview(context.shop.id).size
             syncingOffline = false
-            if (syncedAny) runCatching { refresh() }
         }
     }
 
@@ -533,6 +513,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     }
 
     LaunchedEffect(context.shop.id) {
+        OfflineSyncWorker.schedule(androidContext, context.shop.id)
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
@@ -1759,6 +1740,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 OfflineSalePayload(
                                     clientKey = cashierSaleKey,
                                     shopId = context.shop.id,
+                                    cashierId = context.userId,
                                     customerId = customerId,
                                     motorcycleId = bikeId,
                                     discountAmount = discount,
@@ -1783,6 +1765,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             }
                             offlineStore.saveProducts(context.shop.id, products)
 
+                            OfflineSyncWorker.requestOnReconnect(androidContext, context.shop.id)
                             offlineQueued = provisionalTotal
                             pendingCount = offlineStore.pendingSales(context.shop.id).size
                             cart = emptyList()
