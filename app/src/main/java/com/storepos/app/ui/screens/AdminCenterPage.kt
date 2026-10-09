@@ -20,6 +20,8 @@ import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.local.OfflineSaleSynchronizer
+import com.storepos.app.printing.LocalReceiptPrinter
+import com.storepos.app.printing.ReceiptPdfExporter
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.async
@@ -46,6 +48,19 @@ fun AdminCenterPage(context: ShopContext) {
     var notice by remember { mutableStateOf<String?>(null) }
 
     var pending by remember { mutableStateOf<List<PendingOfflineSale>>(emptyList()) }
+    var reviewIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingOfflinePdf by remember { mutableStateOf<Pair<String, ByteArray>?>(null) }
+    val offlinePdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val job = pendingOfflinePdf
+        pendingOfflinePdf = null
+        if (uri != null && job != null) {
+            runCatching { ReceiptPdfExporter.save(androidContext, uri, job.second) }
+                .onSuccess { notice = "Original pending-sync receipt PDF saved." }
+                .onFailure { error = "PDF save failed: " + (it.message ?: "Unknown error.") }
+        }
+    }
     var auditLogs by remember { mutableStateOf<List<AuditLog>>(emptyList()) }
     var profiles by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
     var alerts by remember { mutableStateOf<List<ShopAlert>>(emptyList()) }
@@ -55,7 +70,9 @@ fun AdminCenterPage(context: ShopContext) {
     var auditQuery by remember { mutableStateOf("") }
 
     suspend fun refresh() = coroutineScope {
-        pending = offlineStore.pendingSales(context.shop.id) + offlineStore.needsReview(context.shop.id)
+        pending = (offlineStore.pendingSales(context.shop.id) +
+            offlineStore.needsReview(context.shop.id)).sortedBy { it.createdAt }
+        reviewIds = offlineStore.needsReview(context.shop.id).map { it.id }.toSet()
         val a = async { runCatching { AdminRepository.auditLogs(context.shop.id) }.getOrDefault(emptyList()) }
         val p = async { runCatching { StoreRepository.userProfiles() }.getOrDefault(emptyList()) }
         val al = async { runCatching { StoreRepository.shopAlerts(context.shop.id) }.getOrDefault(emptyList()) }
@@ -152,13 +169,51 @@ fun AdminCenterPage(context: ShopContext) {
             0 -> SyncCenterTab(
                 pending = pending,
                 syncing = syncing,
+                reviewIds = reviewIds,
+                onPrint = { row ->
+                    scope.launch {
+                        notice = null
+                        error = null
+                        val savedBytes = offlineStore.receiptBytes(context.shop.id, row.id)
+                        if (savedBytes == null) {
+                            error = "This is a legacy pending sale without a saved thermal receipt. " +
+                                "Review manually; do not repeat checkout."
+                        } else {
+                            val result = LocalReceiptPrinter.print(androidContext, savedBytes)
+                            result.onSuccess {
+                                notice = "Pending-sync receipt sent to local printer. " +
+                                    "Check paper before reprinting."
+                            }.onFailure {
+                                error = "Offline receipt not printed: " +
+                                    (it.message ?: "Check directly paired Bluetooth/USB printer.")
+                            }
+                        }
+                    }
+                },
+                onSavePdf = { row ->
+                    runCatching {
+                        val bytes = offlineStore.receiptBytes(context.shop.id, row.id)
+                            ?: error("No thermal receipt was archived for this sale.")
+                        val width = offlineStore.receiptWidth(context.shop.id, row.id)
+                            ?: error("Saved paper width missing.")
+                        ReceiptPdfExporter.renderThermalBytes(bytes, width)
+                    }.onSuccess { pdf ->
+                        val label = "OFF-" + row.id.replace("-", "").take(12).uppercase()
+                        pendingOfflinePdf = label to pdf
+                        offlinePdfLauncher.launch(ReceiptPdfExporter.fileName(label))
+                    }.onFailure {
+                        error = "Cannot export offline PDF: " + (it.message ?: "Receipt unavailable.")
+                    }
+                },
                 onRetryOne = { row ->
                     scope.launch {
                         syncing = true
                         error = null
                         notice = null
                         val ok = syncOne(row)
-                        pending = offlineStore.pendingSales()
+                        pending = (offlineStore.pendingSales(context.shop.id) +
+                            offlineStore.needsReview(context.shop.id)).sortedBy { it.createdAt }
+                        reviewIds = offlineStore.needsReview(context.shop.id).map { it.id }.toSet()
                         notice = if (ok) "Queued sale synced successfully." else null
                         if (!ok) error = pending.firstOrNull { it.id == row.id }?.lastError ?: "Sync failed."
                         syncing = false
@@ -172,7 +227,9 @@ fun AdminCenterPage(context: ShopContext) {
                         val queued = offlineStore.pendingSales(context.shop.id)
                         var success = 0
                         queued.forEach { if (syncOne(it)) success++ }
-                        pending = offlineStore.pendingSales()
+                        pending = (offlineStore.pendingSales(context.shop.id) +
+                            offlineStore.needsReview(context.shop.id)).sortedBy { it.createdAt }
+                        reviewIds = offlineStore.needsReview(context.shop.id).map { it.id }.toSet()
                         notice = success.toString() + " of " + queued.size + " queued sale(s) synced."
                         if (pending.isNotEmpty()) {
                             error = "Some sales still need attention. Open each row to review the last error."
@@ -203,6 +260,9 @@ fun AdminCenterPage(context: ShopContext) {
 private fun SyncCenterTab(
     pending: List<PendingOfflineSale>,
     syncing: Boolean,
+    reviewIds: Set<String>,
+    onPrint: (PendingOfflineSale) -> Unit,
+    onSavePdf: (PendingOfflineSale) -> Unit,
     onRetryOne: (PendingOfflineSale) -> Unit,
     onRetryAll: () -> Unit
 ) {
@@ -264,8 +324,13 @@ private fun SyncCenterTab(
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
-                                    "Offline sale • " + row.payload.items.size + " line(s)",
+                                    (if (row.id in reviewIds) "Needs review" else "Pending sync") +
+                                        " • OFF-" + row.id.replace("-", "").take(12).uppercase(),
                                     fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    row.payload.items.size.toString() + " product line(s)",
+                                    style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
                                     DateFormat.getDateTimeInstance().format(Date(row.createdAt)),
@@ -280,12 +345,20 @@ private fun SyncCenterTab(
                                     )
                                 }
                             }
-                            OutlinedButton(
-                                onClick = { onRetryOne(row) },
-                                enabled = !syncing
-                            ) {
-                                Text("Retry")
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { onPrint(row) }) {
+                                Icon(Icons.Rounded.Print, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Print offline")
                             }
+                            OutlinedButton(onClick = { onSavePdf(row) }) {
+                                Text("Save PDF")
+                            }
+                            Button(
+                                onClick = { onRetryOne(row) },
+                                enabled = !syncing && row.id !in reviewIds
+                            ) { Text("Sync") }
                         }
                     }
                 }
