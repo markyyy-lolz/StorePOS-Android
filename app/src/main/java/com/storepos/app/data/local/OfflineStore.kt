@@ -13,7 +13,7 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
     "motopos_offline.db",
     null,
-    2
+    3
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -39,6 +39,22 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
               created_at integer not null,
               last_error text,
               review_state text not null default 'queued'
+            )
+            """.trimIndent()
+        )
+        createOfflineReceiptTable(db)
+    }
+
+    private fun createOfflineReceiptTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            create table if not exists offline_receipts(
+              client_key text primary key,
+              shop_id text not null,
+              receipt_number text not null,
+              paper_width integer not null,
+              thermal_bytes blob not null,
+              created_at integer not null
             )
             """.trimIndent()
         )
@@ -70,6 +86,7 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
                     }
                 }
         }
+        if (oldVersion < 3) createOfflineReceiptTable(db)
     }
 
     private fun putBlob(key: String, payload: String) {
@@ -134,21 +151,67 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             runCatching { json.decodeFromString<List<Motorcycle>>(it) }.getOrDefault(emptyList())
         } ?: emptyList()
 
-    fun enqueueSale(payload: OfflineSalePayload) {
-        writableDatabase.insertWithOnConflict(
-            "pending_sales",
-            null,
-            ContentValues().apply {
-                put("id", payload.clientKey)
-                put("shop_id", payload.shopId)
-                put("review_state", "queued")
-                put("payload", json.encodeToString(payload))
-                put("created_at", System.currentTimeMillis())
-                putNull("last_error")
-            },
-            SQLiteDatabase.CONFLICT_IGNORE
-        )
+    /** Both sale and original printable bytes commit together before the cart is cleared. */
+    fun enqueueSaleWithReceipt(
+        payload: OfflineSalePayload,
+        receiptNumber: String,
+        paperWidth: Int,
+        thermalBytes: ByteArray
+    ) {
+        require(thermalBytes.isNotEmpty()) { "Cannot queue a cash sale without a local receipt." }
+        require(paperWidth == 58 || paperWidth == 80) { "Invalid receipt width." }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val now = System.currentTimeMillis()
+            val saleAdded = db.insertWithOnConflict(
+                "pending_sales",
+                null,
+                ContentValues().apply {
+                    put("id", payload.clientKey)
+                    put("shop_id", payload.shopId)
+                    put("review_state", "queued")
+                    put("payload", json.encodeToString(payload))
+                    put("created_at", now)
+                    putNull("last_error")
+                },
+                SQLiteDatabase.CONFLICT_IGNORE
+            )
+            // Reusing a client key must not overwrite the original saved sale/receipt.
+            if (saleAdded == -1L) {
+                val saved = receiptBytes(payload.shopId, payload.clientKey, db)
+                require(saved != null && saved.contentEquals(thermalBytes)) {
+                    "Original offline receipt differs from this transaction; manager review required."
+                }
+            } else {
+                db.insertOrThrow(
+                    "offline_receipts",
+                    null,
+                    ContentValues().apply {
+                        put("client_key", payload.clientKey)
+                        put("shop_id", payload.shopId)
+                        put("receipt_number", receiptNumber)
+                        put("paper_width", paperWidth)
+                        put("thermal_bytes", thermalBytes)
+                        put("created_at", now)
+                    }
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
+
+    fun receiptBytes(shopId: String, clientKey: String): ByteArray? =
+        receiptBytes(shopId, clientKey, readableDatabase)
+
+    private fun receiptBytes(shopId: String, clientKey: String, db: SQLiteDatabase): ByteArray? =
+        db.query(
+            "offline_receipts", arrayOf("thermal_bytes"),
+            "shop_id=? and client_key=?", arrayOf(shopId, clientKey),
+            null, null, null
+        ).use { cur -> if (cur.moveToFirst()) cur.getBlob(0) else null }
 
     /** A cashier must never sync pending transactions belonging to another shop. */
     fun pendingSales(shopId: String): List<PendingOfflineSale> =
