@@ -1128,6 +1128,7 @@ object StoreRepository {
                         add(buildJsonObject {
                             put("product_id", line.productId)
                             put("quantity", line.quantity)
+                            line.unitPrice?.let { put("unit_price", it) }
                         })
                     }
                 })
