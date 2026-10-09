@@ -474,7 +474,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         printer.disconnect()
         return result.fold(
             onSuccess = { "Receipt sent to printer." },
-            onFailure = { it.message ?: "Unable to print receipt." }
+            onFailure = {
+                "Receipt not printed. Sale " + sale.saleNumber +
+                    " is already saved; do not repeat checkout. " +
+                    (it.message ?: "Check Bluetooth and printer settings.") +
+                    " Check physical paper output before retrying Print receipt, or use Save PDF."
+            }
         )
     }
 
@@ -1072,8 +1077,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             )
                         }
                     }
-                    printMessage?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    printMessage?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (message.startsWith("Receipt not printed")) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             },
