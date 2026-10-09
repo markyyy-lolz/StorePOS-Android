@@ -1,23 +1,9 @@
-# StorePOS Android v1.7.1 — Scanner & Sign-In Reliability
+# StorePOS Android v1.7.2 — Bluetooth HID Scanner
 
-## Fixed
-- Camera barcode scanning from POS or Inventory no longer intentionally changes the current page to Dashboard after returning from a scanner Activity recreation.
-- Selected navigation destination is saved/restored using Compose rememberSaveable, including on tablet and phone layouts.
-- ZXing scanner orientation is locked for all POS and Inventory scanning entry points.
-- Accidental HID scanner Back/Escape suffix does not send users from POS or Inventory to Dashboard. Use StorePOS sidebar/bottom navigation to switch pages.
+- POS: barcode-search auto-focus, safe Enter/Tab/Escape suffix consumption, repeated-scan quantity increment and search reset.
+- Inventory: scanned barcode selected for quick replacement by the next HID scan.
+- Stocktake: new Bluetooth HID scanner field adds +1 counted quantity per matched barcode; does not approve changes.
+- Added regression tests for CR/LF, Tab, empty scan and repeated barcode inputs.
+- No Supabase migrations or changes to MotoPOS, payment or printing workflows.
 
-## Added
-- **Stay signed in** option on the StorePOS Android sign-in screen (checked by default for compatibility with existing accounts).
-- With the option enabled, Supabase Auth restores its stored device session across app cold starts, subject to valid credentials/device licensing.
-- With the option disabled, the local stored session is cleared the next time the app process launches from cold, requiring credentials again.
-- The preference is device-local; passwords are never stored by this feature, and Sign out remains available. Returning briefly from the scanner does not cause a sign-out.
-
-## Notes
-- Camera orientation, app process recreation, and scanner-specific ESC/BACK suffix behavior depend on the actual tablet and barcode reader. Test on the Samsung Tab A9+ 5G before deploying to active checkout.
-- The previous StorePOS production database and all MotoPOS records remain unchanged.
-
-## Install and update
-- Android version name: **1.7.1**; version code: **25**.
-- Existing StorePOS data, staff, device registration and Supabase tables are preserved.
-- This GitHub APK uses StorePOS internal sideload signing; it is not a Google Play production-signed build.
-- **Hardware check is still needed** on Samsung Galaxy Tab A9+ 5G with your actual camera and USB/Bluetooth scanner. Automated Android tests cannot verify the scan return path of every scanner model.
+See BLUETOOTH_SCANNER_V172.md for Samsung Galaxy Tab A9+ Bluetooth pairing and hardware tests.

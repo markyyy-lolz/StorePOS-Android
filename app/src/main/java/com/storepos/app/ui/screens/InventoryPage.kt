@@ -21,6 +21,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -43,7 +53,21 @@ import com.journeyapps.barcodescanner.ScanOptions
 fun InventoryPage(context: ShopContext) {
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
     var categories by remember { mutableStateOf<List<ProductCategory>>(emptyList()) }
-    var query by remember { mutableStateOf("") }
+    // Preserve the selection after a completed HID scan so the next barcode
+    // replaces the previous lookup rather than appending to it.
+    var searchValue by remember { mutableStateOf(TextFieldValue("")) }
+    val query = searchValue.text
+    val scannerFocusRequester = remember { FocusRequester() }
+    val softwareKeyboard = LocalSoftwareKeyboardController.current
+
+    fun setScannedInventoryCode(code: String) {
+        searchValue = TextFieldValue(
+            text = code,
+            selection = TextRange(0, code.length)
+        )
+        scannerFocusRequester.requestFocus()
+        softwareKeyboard?.hide()
+    }
     var loading by remember { mutableStateOf(true) }
     var addOpen by remember { mutableStateOf(false) }
     var categoryManagerOpen by remember { mutableStateOf(false) }
@@ -60,7 +84,7 @@ fun InventoryPage(context: ShopContext) {
     val inventoryScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
         val code = result.contents?.trim().orEmpty()
         if (code.isNotBlank()) {
-            query = code
+            setScannedInventoryCode(code)
             val match = products.firstOrNull {
                 it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
             }
@@ -95,6 +119,13 @@ fun InventoryPage(context: ShopContext) {
     LaunchedEffect(context.shop.id) {
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         loading = false
+    }
+
+    LaunchedEffect(loading) {
+        if (!loading) {
+            scannerFocusRequester.requestFocus()
+            softwareKeyboard?.hide()
+        }
     }
 
     if (loading) {
@@ -155,10 +186,31 @@ fun InventoryPage(context: ShopContext) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.weight(1f),
+                value = searchValue,
+                onValueChange = { typed ->
+                    val parsed = parseHidScannerText(typed.text)
+                    if (parsed.completedCode != null) {
+                        setScannedInventoryCode(parsed.completedCode)
+                    } else {
+                        searchValue = typed.copy(text = parsed.searchText)
+                    }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(scannerFocusRequester)
+                    .onPreviewKeyEvent { event ->
+                        val terminator = event.key == Key.Enter ||
+                            event.key == Key.Tab ||
+                            event.key == Key.Escape
+                        if (terminator) {
+                            if (event.type == KeyEventType.KeyDown && searchValue.text.isNotBlank()) {
+                                setScannedInventoryCode(searchValue.text.trim())
+                            }
+                            true
+                        } else false
+                    },
                 placeholder = { Text("Search SKU, barcode, name or brand") },
+                supportingText = { Text("Bluetooth HID: next scan replaces previous barcode") },
                 leadingIcon = { Icon(Icons.Rounded.Search, null) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp)
@@ -921,24 +973,40 @@ private fun StocktakeDialog(
     }
     val submitted = count.status == "submitted"
     var scanError by remember(count.id) { mutableStateOf<String?>(null) }
+    var hidCountInput by remember(count.id) { mutableStateOf("") }
+    val stocktakeScanFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    fun incrementStocktakeBarcode(raw: String) {
+        val code = scannedCodeOrNull(raw) ?: return
+        if (submitted) return
+        val product = products.firstOrNull {
+            it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
+        }
+        val item = product?.let { p -> items.firstOrNull { it.productId == p.id } }
+        if (product == null || item == null) {
+            scanError = "Barcode / SKU is not part of this stocktake: $code"
+        } else {
+            val current = values[item.productId]?.toDoubleOrNull() ?: 0.0
+            values = values.toMutableMap().apply {
+                put(item.productId, (current + 1.0).let { next ->
+                    if (next % 1.0 == 0.0) next.toInt().toString() else next.toString()
+                })
+            }
+            scanError = null
+        }
+        hidCountInput = ""
+        stocktakeScanFocus.requestFocus()
+        keyboard?.hide()
+    }
+
     val stocktakeScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val code = result.contents?.trim().orEmpty()
-        if (code.isNotBlank() && !submitted) {
-            val product = products.firstOrNull {
-                it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
-            }
-            val item = product?.let { p -> items.firstOrNull { it.productId == p.id } }
-            if (product == null || item == null) {
-                scanError = "Barcode / SKU is not part of this stocktake: $code"
-            } else {
-                val current = values[item.productId]?.toDoubleOrNull() ?: 0.0
-                values = values.toMutableMap().apply {
-                    put(item.productId, (current + 1.0).let { next ->
-                        if (next % 1.0 == 0.0) next.toInt().toString() else next.toString()
-                    })
-                }
-                scanError = null
-            }
+        incrementStocktakeBarcode(result.contents.orEmpty())
+    }
+    LaunchedEffect(count.id, submitted) {
+        if (!submitted) {
+            stocktakeScanFocus.requestFocus()
+            keyboard?.hide()
         }
     }
 
@@ -963,6 +1031,32 @@ private fun StocktakeDialog(
                         Spacer(Modifier.width(6.dp))
                         Text("Scan item +1")
                     }
+                    OutlinedTextField(
+                        value = hidCountInput,
+                        onValueChange = { raw ->
+                            val update = parseHidScannerText(raw)
+                            hidCountInput = update.searchText
+                            update.completedCode?.let(::incrementStocktakeBarcode)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(stocktakeScanFocus)
+                            .onPreviewKeyEvent { event ->
+                                val suffix = event.key == Key.Enter ||
+                                    event.key == Key.Tab ||
+                                    event.key == Key.Escape
+                                if (suffix) {
+                                    if (event.type == KeyEventType.KeyDown) {
+                                        incrementStocktakeBarcode(hidCountInput)
+                                    }
+                                    true
+                                } else false
+                            },
+                        singleLine = true,
+                        placeholder = { Text("Tap here to scan Bluetooth barcode") },
+                        label = { Text("Bluetooth HID stocktake scanner (+1)") },
+                        supportingText = { Text("Each matching scan adds 1 to the counted quantity.") }
+                    )
                     scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
                 Text(
@@ -973,7 +1067,9 @@ private fun StocktakeDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 520.dp),
+                    // Leave room for the HID input and dialog actions on
+                    // smaller screens and landscape tablets.
+                    modifier = Modifier.heightIn(max = if (submitted) 520.dp else 310.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(items, key = { it.productId }) { item ->
