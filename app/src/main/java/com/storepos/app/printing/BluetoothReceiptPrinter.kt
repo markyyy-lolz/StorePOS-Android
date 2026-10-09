@@ -1,6 +1,9 @@
 package com.storepos.app.printing
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
@@ -25,6 +28,12 @@ class BluetoothReceiptPrinter(
     override suspend fun connect(device: PrinterDevice): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             closeDirect()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                error("Bluetooth access is not allowed. Open StorePOS Settings > Receipt printer, tap Allow Bluetooth, then retry printing this saved sale.")
+            }
 
             val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             val adapter = manager.adapter ?: error("Bluetooth is not available on this device.")
@@ -33,10 +42,20 @@ class BluetoothReceiptPrinter(
             val btDevice = adapter.getRemoteDevice(device.address)
             val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
             val newSocket = btDevice.createRfcommSocketToServiceRecord(spp)
-            adapter.cancelDiscovery()
+            // Paired RFCOMM printing only needs BLUETOOTH_CONNECT on Android
+            // 12+. Calling cancelDiscovery() otherwise requires BLUETOOTH_SCAN
+            // and throws before the receipt is transmitted.
+            if (shouldCancelLegacyDiscovery(Build.VERSION.SDK_INT)) {
+                runCatching { adapter.cancelDiscovery() }
+            }
             newSocket.connect()
             socket = newSocket
             output = newSocket.outputStream
+        }.recoverCatching { failure ->
+            if (failure is SecurityException) {
+                error("Bluetooth printer permission is missing. Open StorePOS Settings > Receipt printer, allow Bluetooth access, then retry this saved receipt.")
+            }
+            throw failure
         }
     }
 
