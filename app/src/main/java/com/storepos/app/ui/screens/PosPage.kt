@@ -40,6 +40,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.OfflineSyncPolicy
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -134,6 +135,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var customerDisplayEnabled by remember { mutableStateOf(false) }
     var offlineQueued by remember { mutableStateOf<Double?>(null) }
     var pendingCount by remember { mutableStateOf(0) }
+    var needsReviewCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
@@ -294,6 +296,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 retailFavorites = rf.await()
             }
             offlineStore.saveProducts(context.shop.id, products)
+            offlineStore.markProductCacheTrusted(context.shop.id)
             offlineStore.saveCustomers(context.shop.id, customers)
             offlineStore.saveMotorcycles(context.shop.id, motorcycles)
 
@@ -317,7 +320,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         ) {
             runCatching { PayMongoRepository.integration(context.shop.id) }.getOrNull()
         } else null
-        pendingCount = offlineStore.pendingSales().size
+        pendingCount = offlineStore.pendingSales(context.shop.id).size
+        needsReviewCount = offlineStore.needsReview(context.shop.id).size
     }
 
     fun requiresRetailOnline(lines: List<CartLine> = cart): Boolean =
@@ -356,6 +360,10 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 error = "Packs, promos, weighed items, batches and serialized stock require StorePOS Cloud checkout. Reconnect before completing this cart."
                 return
             }
+            if (!offlineStore.isProductCacheTrusted(context.shop.id)) {
+                error = "Connect once to refresh this shop's products after the catalog reset before accepting offline sales."
+                return
+            }
             retailQuote = null
             checkout = true
             return
@@ -383,18 +391,46 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     }
 
     suspend fun syncOfflineSales() {
+        if (syncingOffline) return
         syncingOffline = true
-        val pending = offlineStore.pendingSales()
-        pending.forEach { queued ->
-            runCatching { StoreRepository.completeOfflineSale(queued.payload) }
-                .onSuccess { offlineStore.removePendingSale(queued.id) }
-                .onFailure { offlineStore.setPendingError(queued.id, StoreRepository.userMessage(it)) }
-        }
-        pendingCount = offlineStore.pendingSales().size
-        syncingOffline = false
-        if (pendingCount == 0 && pending.isNotEmpty()) {
-            error = null
-            runCatching { refresh() }
+        var syncedAny = false
+        try {
+            val shopId = context.shop.id
+            val pending = offlineStore.pendingSales(shopId)
+            if (pending.isEmpty()) return
+            // First reconcile against CURRENT authoritative cloud products.
+            // A recently factory-reset shop must not replay old barcodes/IDs.
+            val cloudProducts = try {
+                StoreRepository.products(shopId)
+            } catch (networkError: Throwable) {
+                offlineMode = true
+                error = "Offline sales are saved on this tablet. Sync will retry when online."
+                return
+            }
+            for (queued in pending) {
+                val reason = OfflineSyncPolicy.reviewReason(shopId, queued.payload, cloudProducts)
+                if (reason != null) {
+                    offlineStore.markNeedsReview(shopId, queued.id, reason)
+                    continue
+                }
+                runCatching { StoreRepository.completeOfflineSale(queued.payload) }
+                    .onSuccess {
+                        offlineStore.removePendingSale(shopId, queued.id)
+                        syncedAny = true
+                    }
+                    .onFailure { failure ->
+                        offlineStore.setPendingError(shopId, queued.id, StoreRepository.userMessage(failure))
+                    }
+            }
+            if (offlineStore.needsReview(shopId).isNotEmpty()) {
+                error = "Some offline sales need manager review (catalog, price or stock conflict). " +
+                    "These records are preserved locally and have NOT been added to cloud sales."
+            }
+        } finally {
+            pendingCount = offlineStore.pendingSales(context.shop.id).size
+            needsReviewCount = offlineStore.needsReview(context.shop.id).size
+            syncingOffline = false
+            if (syncedAny) runCatching { refresh() }
         }
     }
 
@@ -500,6 +536,19 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
+    }
+
+    // Automatic retry while the POS register is open. Both tablets keep
+    // distinct local queues and send them through idempotent cloud RPC keys.
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            delay(30_000)
+            if (pendingCount > 0 && !syncingOffline) {
+                runCatching { syncOfflineSales() }
+            } else if (offlineMode && pendingCount == 0) {
+                runCatching { refresh() }
+            }
+        }
     }
 
     LaunchedEffect(pendingPayMongo?.sessionId, paymongoRetryNonce) {
@@ -667,6 +716,16 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             Spacer(Modifier.width(4.dp))
                             Text("Held " + heldSales.size)
                         }
+                    }
+                    if (needsReviewCount > 0) {
+                        AssistChip(
+                            onClick = {
+                                error = "$needsReviewCount offline sale(s) need manager review. " +
+                                    "Original receipt and customer payment details are retained on this tablet; " +
+                                    "they will not auto-sync after a factory reset or stock/price conflict."
+                            },
+                            label = { Text("Needs review: " + needsReviewCount) }
+                        )
                     }
                     if (pendingCount > 0) {
                         Button(
@@ -1619,6 +1678,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         return@launch
                     }
 
+                    val cashierSaleKey = UUID.randomUUID().toString()
                     runCatching {
                         if (offlineMode) {
                             StoreRepository.completeSaleV3(
@@ -1630,7 +1690,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 discount = discount,
                                 tax = tax,
                                 payments = payments,
-                                managerPin = managerPin
+                                managerPin = managerPin,
+                                clientKey = cashierSaleKey
                             ) to null
                         } else {
                             RetailRepository.checkout(
@@ -1641,7 +1702,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 payments = payments,
                                 managerPin = managerPin,
                                 charges = charges,
-                                dueDate = dueDate
+                                dueDate = dueDate,
+                                clientKey = cashierSaleKey
                             ).let { it.sale to it.receiptToken }
                         }
                     }.onSuccess { result ->
@@ -1676,8 +1738,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 error = "Manager-approved transactions cannot be queued offline. Reconnect and retry."
                                 return@onFailure
                             }
-                            if (payments.any { it.method in listOf("store_credit","credit") }) {
-                                error = "Store credit and customer credit require an online connection."
+                            if (payments.any { it.method != "cash" }) {
+                                error = "Only cash sales can be queued offline. Verify online payment " +
+                                    "status before retrying. Never charge the customer twice."
+                                return@onFailure
+                            }
+                            if (!offlineStore.isProductCacheTrusted(context.shop.id)) {
+                                error = "Reconnect and refresh the shop catalog after the reset before offline sales."
                                 return@onFailure
                             }
 
@@ -1690,7 +1757,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             val first = payments.first()
                             offlineStore.enqueueSale(
                                 OfflineSalePayload(
-                                    clientKey = UUID.randomUUID().toString(),
+                                    clientKey = cashierSaleKey,
                                     shopId = context.shop.id,
                                     customerId = customerId,
                                     motorcycleId = bikeId,
@@ -1700,7 +1767,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                     paymentMethod = first.method,
                                     referenceNumber = first.referenceNumber,
                                     items = soldCart.map {
-                                        SaleRpcItem(it.product.id, it.quantity, it.unitPriceOverride)
+                                        SaleRpcItem(it.product.id, it.quantity, it.unitPrice)
                                     },
                                     payments = payments
                                 )
@@ -1717,7 +1784,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             offlineStore.saveProducts(context.shop.id, products)
 
                             offlineQueued = provisionalTotal
-                            pendingCount = offlineStore.pendingSales().size
+                            pendingCount = offlineStore.pendingSales(context.shop.id).size
                             cart = emptyList()
                             checkout = false
                             offlineMode = true
