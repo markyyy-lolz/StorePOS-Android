@@ -206,6 +206,15 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     fun receiptBytes(shopId: String, clientKey: String): ByteArray? =
         receiptBytes(shopId, clientKey, readableDatabase)
 
+    fun receiptWidth(shopId: String, clientKey: String): Int? =
+        readableDatabase.query(
+            "offline_receipts", arrayOf("paper_width"),
+            "shop_id=? and client_key=?", arrayOf(shopId, clientKey),
+            null, null, null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else null
+        }
+
     private fun receiptBytes(shopId: String, clientKey: String, db: SQLiteDatabase): ByteArray? =
         db.query(
             "offline_receipts", arrayOf("thermal_bytes"),
