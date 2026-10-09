@@ -20,6 +20,8 @@ object AppSessionRetention {
     @Volatile
     private var handledThisProcess = false
 
+    internal fun mustClearAtColdStart(staySignedIn: Boolean): Boolean = !staySignedIn
+
     fun shouldStaySignedIn(context: Context): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(KEY_STAY_SIGNED_IN, true)
@@ -39,7 +41,7 @@ object AppSessionRetention {
         }
         val auth = SupabaseProvider.client.auth
         auth.awaitInitialization()
-        if (!shouldStaySignedIn(context)) {
+        if (mustClearAtColdStart(shouldStaySignedIn(context))) {
             // Local-only session clearance: no need for network on restart.
             auth.clearSession()
         }
