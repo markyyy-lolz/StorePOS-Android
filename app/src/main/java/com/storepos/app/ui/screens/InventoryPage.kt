@@ -1067,7 +1067,9 @@ private fun StocktakeDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 520.dp),
+                    // Leave room for the HID input and dialog actions on
+                    // smaller screens and landscape tablets.
+                    modifier = Modifier.heightIn(max = if (submitted) 520.dp else 310.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(items, key = { it.productId }) { item ->
