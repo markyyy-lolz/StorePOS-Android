@@ -23,7 +23,15 @@ class ReceiptCutSettingsTest {
         name = "Test product", sku = "P-100", sellingPrice = 39.0)
 
     private fun assertFooterGap(receipt: ByteArray, extraLines: Int) {
-        val needle = "Powered by StorePOS\n".toByteArray(Charsets.US_ASCII)
+        // Sales receipts include one additional tagline below the Powered by line.
+        // The cutter must be after the *last* printable footer line.
+        val output = String(receipt, Charsets.US_ASCII)
+        val lastFooter = if (output.contains("Retail Management & POS System\n")) {
+            "Retail Management & POS System\n"
+        } else {
+            "Powered by StorePOS\n"
+        }
+        val needle = lastFooter.toByteArray(Charsets.US_ASCII)
         val footerIndex = receipt.indices.firstOrNull { start ->
             start + needle.size <= receipt.size &&
                 receipt.copyOfRange(start, start + needle.size).contentEquals(needle)
