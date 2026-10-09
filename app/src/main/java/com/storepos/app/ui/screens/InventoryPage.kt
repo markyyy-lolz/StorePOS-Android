@@ -73,7 +73,7 @@ fun InventoryPage(context: ShopContext) {
             ScanOptions()
                 .setPrompt("Scan inventory barcode")
                 .setBeepEnabled(true)
-                .setOrientationLocked(false)
+                .setOrientationLocked(true)
         )
     }
 
@@ -414,7 +414,7 @@ private fun AddProductDialog(
                                 ScanOptions()
                                     .setPrompt("Scan product barcode")
                                     .setBeepEnabled(true)
-                                    .setOrientationLocked(false)
+                                    .setOrientationLocked(true)
                             )
                         }) {
                             Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan product barcode")
@@ -954,7 +954,7 @@ private fun StocktakeDialog(
                                 ScanOptions()
                                     .setPrompt("Scan item to count")
                                     .setBeepEnabled(true)
-                                    .setOrientationLocked(false)
+                                    .setOrientationLocked(true)
                             )
                         },
                         modifier = Modifier.fillMaxWidth()
