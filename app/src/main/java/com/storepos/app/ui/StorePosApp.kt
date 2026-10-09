@@ -481,7 +481,7 @@ private fun MainShell(
                     MobileNav(
                         pages = availablePages,
                         selected = page,
-                        onSelect = { page = it },
+                        onSelect = { pageName = it.name },
                         onSignOut = { signOutConfirm = true }
                     )
                 }
@@ -491,7 +491,7 @@ private fun MainShell(
                     context = shopContext,
                     licenseAccess = licenseAccess,
                     entitlements = entitlements,
-                    onNavigate = { target -> if (target in availablePages) page = target },
+                    onNavigate = { target -> if (target in availablePages) pageName = target.name },
                     modifier = Modifier.padding(padding)
                 )
             }
