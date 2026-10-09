@@ -14,10 +14,20 @@
 - **Cloud stock conflict:** insufficient available cloud stock is quarantined locally for review.
 - **Automatic sync while the POS page remains open:** attempts the shop queue roughly every 30 seconds, with manual Sync still available.
 
+## Offline thermal receipt and PDF — phase 1
+
+- After a cash sale is queued on **this tablet**, persist the original ESC/POS receipt bytes **in the same SQLite transaction** as the pending cash sale. If local storage fails, the cart stays open and the app must not claim the sale is saved.
+- Cashier can **Print offline** through the VOZY G80 directly paired to the SAME tablet by Bluetooth HID/SPP or USB. Automatic print runs when enabled in printer settings; manual Print offline retry is available without running a second checkout.
+- Printed receipt is visibly **OFFLINE CASH RECEIPT**, **PENDING SYNC**, **NOT POSTED TO STOREPOS CLOUD**, and **NOT AN OFFICIAL TAX RECEIPT** with a stable unique `OFF-...` provisional number, cash amounts, change and StorePOS footer/cut spacing.
+- **Save PDF** uses the same already-stored ESC/POS byte stream as the physical print, preserving thermal receipt parity and paper width. It works while airplane mode is on.
+- **Admin → Sync Center** permits locally archived provisional receipt reprint and matching PDF even after closing the confirmation dialog or reopening the app, while the pending record remains. Printing never triggers a new sale or cloud write.
+- **Shared cloud printer** does NOT function in airplane mode. With two tablets and one VOZY G80, only the tablet with direct Bluetooth/USB connection can print immediately. The second tablet needs a separate local printer connection or LAN-host print bridge; StorePOS cloud print queue is not a LAN printer replacement.
+- Offline receipt is **provisional**, not the final numbered cloud receipt or proof of PayMongo verification. When sync fails or needs manager review, local receipt remains for cash reconciliation.
+
 ## Known requirements before v1.8.0 stable
 
 - Needs authenticated/background WorkManager replay and clear review dashboard. This branch currently retries only while the POS UI is open.
-- Offline provisional thermal receipts, locally consistent receipt numbering and a pending-sync receipt label need integration testing.
+- Physical offline VOZY G80 Bluetooth and USB printing, PDF parity, auto cutter placement and reprint after app restart still need two-tablet hardware validation.
 - Cross-tablet global stock cannot be guaranteed during network loss: quantities are provisional until cloud verification. Conflicting stock needs manager resolution, not a silent negative-stock write.
 - A shop catalog reset epoch should eventually be validated **inside the same database transaction** as the cash sale write; the current client-side product/price comparison is an additional safety layer but is not an atomic server-side gate.
 - Need to repair/stabilize GitHub APK signing: prior releases had certificate mismatches, so a newly signed APK may not install over an existing tablet installation without preserving the original signing key.
