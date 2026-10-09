@@ -30,15 +30,21 @@ object ThermalReportFormatter {
             add(divider)
         }
 
-    private fun bytes(lines: List<String>): ByteArray =
+    private fun bytes(lines: List<String>, footerFeedLines: Int): ByteArray =
         byteArrayOf(0x1B,0x40) +
-            (lines.joinToString("\n",postfix="\n\n\n").toByteArray(Charsets.US_ASCII)) +
-            byteArrayOf(0x1D,0x56,0x00)
+            lines.joinToString("\n",postfix="\n").toByteArray(Charsets.US_ASCII) +
+            ReceiptCutSettings.extraFeedAndFullCut(footerFeedLines)
 
     private fun JsonObject.amount(name: String): Double =
         get(name)?.jsonPrimitive?.doubleOrNull ?: 0.0
 
-    fun x(shop: Shop, report: JsonObject, terminal: String, timestamp: String): ByteArray {
+    fun x(
+        shop: Shop,
+        report: JsonObject,
+        terminal: String,
+        timestamp: String,
+        footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES
+    ): ByteArray {
         val lines = header(shop,"X READING - LIVE",terminal,timestamp)
         lines += "TENDER RECONCILIATION"
         val methods = runCatching { report["payment_breakdown"]?.jsonObject }.getOrNull()
@@ -59,10 +65,16 @@ object ThermalReportFormatter {
         lines += divider
         lines += "LIVE READING - DOES NOT CLOSE SHIFT"
         lines += "Powered by StorePOS"
-        return bytes(lines)
+        return bytes(lines,footerFeedLines)
     }
 
-    fun z(shop: Shop, report: ZReport, terminal: String, batch: Boolean = false): ByteArray {
+    fun z(
+        shop: Shop,
+        report: ZReport,
+        terminal: String,
+        batch: Boolean = false,
+        footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES
+    ): ByteArray {
         require(report.shopId == shop.id) { "Z-report belongs to a different store." }
         val title = if (batch) "BATCH SALES REPORT" else "Z READING - FINAL"
         val lines = header(shop,title,terminal,report.generatedAt)
@@ -96,7 +108,7 @@ object ThermalReportFormatter {
         lines += divider
         lines += "CLOSED SHIFT - HISTORICAL SNAPSHOT"
         lines += "Powered by StorePOS"
-        return bytes(lines)
+        return bytes(lines,footerFeedLines)
     }
 }
 

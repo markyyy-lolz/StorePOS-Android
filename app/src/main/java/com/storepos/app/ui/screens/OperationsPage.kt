@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.storepos.app.printing.SharedPrintDispatcher
+import com.storepos.app.printing.ReceiptCutSettings
 import com.storepos.app.printing.ThermalReportFormatter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -336,7 +337,7 @@ fun OperationsPage(context: ShopContext) {
                         OutlinedButton(onClick = {
                             scope.launch {
                                 runCatching {
-                                    val bytes = ThermalReportFormatter.z(context.shop,z,context.userId.take(8))
+                                    val bytes = ThermalReportFormatter.z(context.shop,z,context.userId.take(8),footerFeedLines = ReceiptCutSettings.get(androidContext))
                                     SharedPrintDispatcher.dispatch(androidContext,context.shop.id,"z_report",bytes)
                                 }.onSuccess { receiptNotice = it }
                                  .onFailure { error = StoreRepository.userMessage(it) }
@@ -345,7 +346,7 @@ fun OperationsPage(context: ShopContext) {
                         OutlinedButton(onClick = {
                             scope.launch {
                                 runCatching {
-                                    val bytes = ThermalReportFormatter.z(context.shop,z,context.userId.take(8),true)
+                                    val bytes = ThermalReportFormatter.z(context.shop,z,context.userId.take(8),true,ReceiptCutSettings.get(androidContext))
                                     SharedPrintDispatcher.dispatch(androidContext,context.shop.id,"batch_report",bytes)
                                 }.onSuccess { receiptNotice = it }
                                  .onFailure { error = StoreRepository.userMessage(it) }

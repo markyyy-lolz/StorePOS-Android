@@ -21,7 +21,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.model.ShopContext
+import com.storepos.app.printing.ReceiptCutSettings
 import com.storepos.app.printing.BluetoothReceiptPrinter
+import kotlin.math.roundToInt
 import com.storepos.app.printing.PrinterDevice
 import com.storepos.app.printing.ReceiptPrinter
 import com.storepos.app.printing.UsbReceiptPrinter
@@ -40,6 +42,9 @@ fun PrinterSettingsCard(context: ShopContext) {
     var address by remember { mutableStateOf(prefs.getString("printer_address", null)) }
     var name by remember { mutableStateOf(prefs.getString("printer_name", null)) }
     var width by remember { mutableIntStateOf(prefs.getInt("paper_width", 80)) }
+    var footerFeedLines by remember {
+        mutableIntStateOf(ReceiptCutSettings.get(androidContext))
+    }
     var devices by remember { mutableStateOf<List<PrinterDevice>>(emptyList()) }
     var message by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
@@ -127,6 +132,49 @@ fun PrinterSettingsCard(context: ShopContext) {
                 { Text("58mm") }
             )
         }
+
+        HorizontalDivider()
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Footer-to-Cut Spacing",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Blank paper after Powered by StorePOS, before the automatic full cut.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "$footerFeedLines lines",
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = footerFeedLines.toFloat(),
+            onValueChange = { value ->
+                footerFeedLines = ReceiptCutSettings.normalize(value.roundToInt())
+                prefs.edit().putInt(ReceiptCutSettings.PREF_KEY, footerFeedLines).apply()
+            },
+            valueRange = 0f..ReceiptCutSettings.MAX_LINES.toFloat(),
+            steps = ReceiptCutSettings.MAX_LINES - 1,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            "0 = closest cut, 8 = longest feed. Default is 2. " +
+                "The physical cutter may need extra clearance; use Test print to check. " +
+                "This setting applies to new receipts and queued print jobs.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         if (transport == "bluetooth") {
             if (!bluetoothPermitted() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -226,7 +274,7 @@ fun PrinterSettingsCard(context: ShopContext) {
                     val result = printer.connect(device).fold(
                         onSuccess = {
                             printer.printReceipt(
-                                BluetoothReceiptPrinter.testReceipt(context.shop.name, width)
+                                BluetoothReceiptPrinter.testReceipt(context.shop.name, width, footerFeedLines)
                             )
                         },
                         onFailure = { Result.failure(it) }

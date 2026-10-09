@@ -35,6 +35,7 @@ import java.time.LocalDate
 import java.time.Instant
 import androidx.compose.ui.platform.LocalContext
 import com.storepos.app.printing.SharedPrintDispatcher
+import com.storepos.app.printing.ReceiptCutSettings
 import com.storepos.app.printing.ThermalReportFormatter
 
 private fun JsonObject.text(key: String): String =
@@ -485,7 +486,7 @@ fun RetailControlPage(context: ShopContext) {
             scope.launch {
                 runCatching {
                     val bytes = ThermalReportFormatter.x(
-                        context.shop,report,context.userId.take(8),Instant.now().toString())
+                        context.shop,report,context.userId.take(8),Instant.now().toString(),ReceiptCutSettings.get(androidContext))
                     SharedPrintDispatcher.dispatch(androidContext,context.shop.id,"x_report",bytes)
                 }.onSuccess { notice = it }.onFailure { error = StoreRepository.userMessage(it) }
             }

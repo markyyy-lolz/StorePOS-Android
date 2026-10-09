@@ -115,7 +115,8 @@ class BluetoothReceiptPrinter(
             compactMode: Boolean = false,
             sectionOrder: List<String> = listOf(
                 "store", "meta", "items", "totals", "payment", "digital", "footer"
-            )
+            ),
+            footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES
         ): ByteArray {
             val charset = Charset.forName("CP437")
             val width = if (paperWidth == 58) 32 else 48
@@ -276,8 +277,9 @@ class BluetoothReceiptPrinter(
                 }
             }
 
-            out.write("\n\n".toByteArray(charset))
-            out.write(byteArrayOf(0x1D, 0x56, 0x00))
+            // Only extra space between the final "Powered by StorePOS" line
+            // and the hardware cutter is adjustable. The cutter remains full.
+            out.write(ReceiptCutSettings.extraFeedAndFullCut(footerFeedLines))
             return out.toByteArray()
         }
 
@@ -310,7 +312,11 @@ class BluetoothReceiptPrinter(
             return left + " ".repeat((width - left.length - right.length).coerceAtLeast(1)) + right
         }
 
-        fun testReceipt(shopName: String, paperWidth: Int = 80): ByteArray {
+        fun testReceipt(
+            shopName: String,
+            paperWidth: Int = 80,
+            footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES
+        ): ByteArray {
             val charset = Charset.forName("CP437")
             val width = if (paperWidth == 58) 32 else 48
             val lines = mutableListOf<String>()
@@ -321,12 +327,11 @@ class BluetoothReceiptPrinter(
             lines += "Paper width: ${paperWidth}mm"
             lines += "Status: OK"
             lines += "-".repeat(width)
-            lines += center("Ride safe!", width)
-            val body = lines.joinToString("\n", postfix = "\n\n\n").toByteArray(charset)
+            lines += center("Powered by StorePOS", width)
+            val body = lines.joinToString("\n", postfix = "\n").toByteArray(charset)
 
             val init = byteArrayOf(0x1B, 0x40)
-            val cut = byteArrayOf(0x1D, 0x56, 0x00)
-            return init + body + cut
+            return init + body + ReceiptCutSettings.extraFeedAndFullCut(footerFeedLines)
         }
 
         private fun center(value: String, width: Int): String {

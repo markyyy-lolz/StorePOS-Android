@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.model.ShopContext
+import com.storepos.app.printing.ReceiptCutSettings
 import com.storepos.app.printing.BluetoothReceiptPrinter
 import com.storepos.app.printing.SharedPrintHostService
 import com.storepos.app.printing.SharedPrintRepository
@@ -132,7 +133,7 @@ fun SharedPrinterSettingsCard(shopContext: ShopContext) {
                 scope.launch {
                     runCatching {
                         require(printer != null) { "Configure the shared printer first." }
-                        val bytes = BluetoothReceiptPrinter.testReceipt(shopContext.shop.name,80)
+                        val bytes = BluetoothReceiptPrinter.testReceipt(shopContext.shop.name,80,ReceiptCutSettings.get(androidContext))
                         repo.enqueue(shopContext.shop.id,deviceId,"test",bytes,
                             "test:" + UUID.randomUUID())
                         message = "Test receipt added to the FIFO queue."
