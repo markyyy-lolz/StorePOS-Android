@@ -21,6 +21,8 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.storepos.app.data.AppSessionRetention
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
@@ -171,10 +173,15 @@ fun AuthScreen(
         email: String,
         password: String,
         signUp: Boolean,
+        staySignedIn: Boolean,
         captchaToken: String
     ) -> Unit
 ) {
+    val appContext = LocalContext.current
     var signUp by remember { mutableStateOf(false) }
+    var staySignedIn by rememberSaveable {
+        mutableStateOf(AppSessionRetention.shouldStaySignedIn(appContext))
+    }
     var displayName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -255,6 +262,27 @@ fun AuthScreen(
                     shape = RoundedCornerShape(16.dp)
                 )
 
+                if (!signUp) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = staySignedIn,
+                            onCheckedChange = { staySignedIn = it },
+                            enabled = !busy
+                        )
+                        Column {
+                            Text("Stay signed in", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Keep this device signed in after closing and reopening StorePOS.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+
                 if (signUp) {
                     Text(
                         "Use at least 8 characters for new accounts.",
@@ -311,7 +339,7 @@ fun AuthScreen(
                         if (signUp) signUpCooldown = 60
                         captchaToken = null
                         challengeRefreshKey += 1
-                        onSubmit(displayName, email, password, signUp, token)
+                        onSubmit(displayName, email, password, signUp, staySignedIn, token)
                     },
                     enabled = !busy && !captchaToken.isNullOrBlank() && email.isNotBlank() &&
                         password.length >= (if (signUp) 8 else 6) &&

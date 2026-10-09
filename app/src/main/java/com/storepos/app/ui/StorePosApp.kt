@@ -9,6 +9,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.storepos.app.data.AppSessionRetention
+import com.storepos.app.data.remote.SupabaseProvider
+import io.github.jan.supabase.auth.auth
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -50,6 +54,9 @@ enum class AppPage(val label: String, val icon: ImageVector) {
     Settings("Settings", Icons.Rounded.Settings)
 }
 
+internal fun restoredAppPage(stored: String?): AppPage =
+    AppPage.entries.firstOrNull { it.name == stored } ?: AppPage.Dashboard
+
 private sealed interface BootState {
     data object Loading : BootState
     data object Auth : BootState
@@ -85,6 +92,7 @@ fun StorePosApp() {
     suspend fun restore() {
         state = BootState.Loading
         error = null
+        SupabaseProvider.client.auth.awaitInitialization()
         val userId = StoreRepository.currentUserId()
         if (userId == null) {
             state = BootState.Auth
@@ -126,7 +134,12 @@ fun StorePosApp() {
     }
 
     LaunchedEffect(Unit) {
-        restoreSafely()
+        runCatching { AppSessionRetention.enforceOnColdStart(androidContext) }
+            .onSuccess { restoreSafely() }
+            .onFailure {
+                error = StoreRepository.userMessage(it)
+                state = BootState.Auth
+            }
     }
 
     when (val current = state) {
@@ -135,7 +148,7 @@ fun StorePosApp() {
             busy = busy,
             error = error,
             notice = notice,
-            onSubmit = { displayName, email, password, signUp, captchaToken ->
+            onSubmit = { displayName, email, password, signUp, staySignedIn, captchaToken ->
                 scope.launch {
                     busy = true
                     error = null
@@ -150,6 +163,7 @@ fun StorePosApp() {
                             true
                         }
                     }.onSuccess { hasSession ->
+                        if (hasSession) AppSessionRetention.setStaySignedIn(androidContext, staySignedIn)
                         if (signUp && !hasSession) {
                             notice = "Verification email sent. Open the email, verify your account, then sign in."
                             state = BootState.Auth
@@ -419,15 +433,25 @@ private fun MainShell(
             roleAndPlanAllow && permissionAllows
         }
     }
-    var page by remember(shopContext.shop.id) { mutableStateOf(AppPage.Dashboard) }
+    // Persist the destination across Activity recreation (e.g. returning
+    // from the ZXing camera scanner) instead of defaulting to Dashboard.
+    var pageName by rememberSaveable(shopContext.shop.id) {
+        mutableStateOf(AppPage.Dashboard.name)
+    }
+    val page = restoredAppPage(pageName)
     var signOutConfirm by remember { mutableStateOf(false) }
 
     BackHandler(enabled = page != AppPage.Dashboard) {
-        page = AppPage.Dashboard
+        // Some HID barcode scanners emit a Back/Escape key after scanning.
+        // POS and Inventory must never navigate away on an accidental scan key.
+        // Staff can use sidebar/bottom navigation to switch pages instead.
+        if (page != AppPage.POS && page != AppPage.Inventory) {
+            pageName = AppPage.Dashboard.name
+        }
     }
 
     LaunchedEffect(availablePages) {
-        if (page !in availablePages) page = AppPage.Dashboard
+        if (page !in availablePages) pageName = AppPage.Dashboard.name
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -439,7 +463,7 @@ private fun MainShell(
                     role = shopContext.member.role,
                     pages = availablePages,
                     selected = page,
-                    onSelect = { page = it },
+                    onSelect = { pageName = it.name },
                     onSignOut = { signOutConfirm = true }
                 )
                 PageContent(
@@ -447,7 +471,7 @@ private fun MainShell(
                     context = shopContext,
                     licenseAccess = licenseAccess,
                     entitlements = entitlements,
-                    onNavigate = { target -> if (target in availablePages) page = target },
+                    onNavigate = { target -> if (target in availablePages) pageName = target.name },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -457,7 +481,7 @@ private fun MainShell(
                     MobileNav(
                         pages = availablePages,
                         selected = page,
-                        onSelect = { page = it },
+                        onSelect = { pageName = it.name },
                         onSignOut = { signOutConfirm = true }
                     )
                 }
@@ -467,7 +491,7 @@ private fun MainShell(
                     context = shopContext,
                     licenseAccess = licenseAccess,
                     entitlements = entitlements,
-                    onNavigate = { target -> if (target in availablePages) page = target },
+                    onNavigate = { target -> if (target in availablePages) pageName = target.name },
                     modifier = Modifier.padding(padding)
                 )
             }
