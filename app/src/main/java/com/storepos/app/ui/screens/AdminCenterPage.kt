@@ -19,6 +19,7 @@ import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.OfflineSaleSynchronizer
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.async
@@ -54,7 +55,7 @@ fun AdminCenterPage(context: ShopContext) {
     var auditQuery by remember { mutableStateOf("") }
 
     suspend fun refresh() = coroutineScope {
-        pending = offlineStore.pendingSales()
+        pending = offlineStore.pendingSales(context.shop.id) + offlineStore.needsReview(context.shop.id)
         val a = async { runCatching { AdminRepository.auditLogs(context.shop.id) }.getOrDefault(emptyList()) }
         val p = async { runCatching { StoreRepository.userProfiles() }.getOrDefault(emptyList()) }
         val al = async { runCatching { StoreRepository.shopAlerts(context.shop.id) }.getOrDefault(emptyList()) }
@@ -71,14 +72,18 @@ fun AdminCenterPage(context: ShopContext) {
     }
 
     suspend fun syncOne(row: PendingOfflineSale): Boolean {
-        return runCatching {
-            StoreRepository.completeOfflineSale(row.payload)
-            offlineStore.removePendingSale(row.id)
-            true
-        }.getOrElse {
-            offlineStore.setPendingError(row.id, StoreRepository.userMessage(it))
-            false
+        if (offlineStore.needsReview(context.shop.id).any { it.id == row.id }) {
+            error = "This sale requires manual manager review after the catalog reset. " +
+                "Do not re-submit or charge the customer again."
+            return false
         }
+        val result = OfflineSaleSynchronizer.syncShop(
+            context.shop.id, offlineStore, onlySaleId = row.id
+        )
+        if (result.needsReview > 0) {
+            error = "Some sales cannot be synchronized due to catalog or stock conflicts."
+        }
+        return result.synced == 1
     }
 
     LaunchedEffect(context.shop.id) {
@@ -164,7 +169,7 @@ fun AdminCenterPage(context: ShopContext) {
                         syncing = true
                         error = null
                         notice = null
-                        val queued = offlineStore.pendingSales()
+                        val queued = offlineStore.pendingSales(context.shop.id)
                         var success = 0
                         queued.forEach { if (syncOne(it)) success++ }
                         pending = offlineStore.pendingSales()
