@@ -973,24 +973,40 @@ private fun StocktakeDialog(
     }
     val submitted = count.status == "submitted"
     var scanError by remember(count.id) { mutableStateOf<String?>(null) }
+    var hidCountInput by remember(count.id) { mutableStateOf("") }
+    val stocktakeScanFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    fun incrementStocktakeBarcode(raw: String) {
+        val code = scannedCodeOrNull(raw) ?: return
+        if (submitted) return
+        val product = products.firstOrNull {
+            it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
+        }
+        val item = product?.let { p -> items.firstOrNull { it.productId == p.id } }
+        if (product == null || item == null) {
+            scanError = "Barcode / SKU is not part of this stocktake: $code"
+        } else {
+            val current = values[item.productId]?.toDoubleOrNull() ?: 0.0
+            values = values.toMutableMap().apply {
+                put(item.productId, (current + 1.0).let { next ->
+                    if (next % 1.0 == 0.0) next.toInt().toString() else next.toString()
+                })
+            }
+            scanError = null
+        }
+        hidCountInput = ""
+        stocktakeScanFocus.requestFocus()
+        keyboard?.hide()
+    }
+
     val stocktakeScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val code = result.contents?.trim().orEmpty()
-        if (code.isNotBlank() && !submitted) {
-            val product = products.firstOrNull {
-                it.barcode.equals(code, ignoreCase = true) || it.sku.equals(code, ignoreCase = true)
-            }
-            val item = product?.let { p -> items.firstOrNull { it.productId == p.id } }
-            if (product == null || item == null) {
-                scanError = "Barcode / SKU is not part of this stocktake: $code"
-            } else {
-                val current = values[item.productId]?.toDoubleOrNull() ?: 0.0
-                values = values.toMutableMap().apply {
-                    put(item.productId, (current + 1.0).let { next ->
-                        if (next % 1.0 == 0.0) next.toInt().toString() else next.toString()
-                    })
-                }
-                scanError = null
-            }
+        incrementStocktakeBarcode(result.contents.orEmpty())
+    }
+    LaunchedEffect(count.id, submitted) {
+        if (!submitted) {
+            stocktakeScanFocus.requestFocus()
+            keyboard?.hide()
         }
     }
 
@@ -1015,6 +1031,32 @@ private fun StocktakeDialog(
                         Spacer(Modifier.width(6.dp))
                         Text("Scan item +1")
                     }
+                    OutlinedTextField(
+                        value = hidCountInput,
+                        onValueChange = { raw ->
+                            val update = parseHidScannerText(raw)
+                            hidCountInput = update.searchText
+                            update.completedCode?.let(::incrementStocktakeBarcode)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(stocktakeScanFocus)
+                            .onPreviewKeyEvent { event ->
+                                val suffix = event.key == Key.Enter ||
+                                    event.key == Key.Tab ||
+                                    event.key == Key.Escape
+                                if (suffix) {
+                                    if (event.type == KeyEventType.KeyDown) {
+                                        incrementStocktakeBarcode(hidCountInput)
+                                    }
+                                    true
+                                } else false
+                            },
+                        singleLine = true,
+                        placeholder = { Text("Tap here to scan Bluetooth barcode") },
+                        label = { Text("Bluetooth HID stocktake scanner (+1)") },
+                        supportingText = { Text("Each matching scan adds 1 to the counted quantity.") }
+                    )
                     scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
                 Text(
