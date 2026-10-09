@@ -102,6 +102,17 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     fun saveProducts(shopId: String, products: List<Product>) =
         putBlob("products:$shopId", json.encodeToString(products))
 
+    /**
+     * Require at least one successful online catalog refresh after migration
+     * before permitting cash sales offline. Older pre-reset cache alone is
+     * not an authoritative product catalog.
+     */
+    fun markProductCacheTrusted(shopId: String) =
+        putBlob("trusted_products:$shopId", System.currentTimeMillis().toString())
+
+    fun isProductCacheTrusted(shopId: String): Boolean =
+        getBlob("trusted_products:$shopId") != null
+
     fun loadProducts(shopId: String): List<Product> =
         getBlob("products:$shopId")?.let {
             runCatching { json.decodeFromString<List<Product>>(it) }.getOrDefault(emptyList())
