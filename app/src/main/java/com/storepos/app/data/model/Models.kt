@@ -710,6 +710,7 @@ data class CompleteSaleRpcParams(
 data class OfflineSalePayload(
     @SerialName("client_key") val clientKey: String,
     @SerialName("shop_id") val shopId: String,
+    @SerialName("cashier_id") val cashierId: String? = null,
     @SerialName("customer_id") val customerId: String? = null,
     @SerialName("motorcycle_id") val motorcycleId: String? = null,
     @SerialName("job_order_id") val jobOrderId: String? = null,
