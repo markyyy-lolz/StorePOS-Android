@@ -1774,18 +1774,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     val cashierSaleKey = UUID.randomUUID().toString()
                     runCatching {
                         if (offlineMode) {
-                            StoreRepository.completeSaleV3(
-                                shopId = context.shop.id,
-                                customerId = customerId,
-                                motorcycleId = bikeId,
-                                jobOrderId = null,
-                                cart = soldCart,
-                                discount = discount,
-                                tax = tax,
-                                payments = payments,
-                                managerPin = managerPin,
-                                clientKey = cashierSaleKey
-                            ) to null
+                            // Avoid network calls while explicitly offline; cash sale and
+                            // thermal receipt are persisted atomically below instead.
+                            throw IllegalStateException("Offline mode: queue cash sale locally.")
                         } else {
                             RetailRepository.checkout(
                                 shopId = context.shop.id,
