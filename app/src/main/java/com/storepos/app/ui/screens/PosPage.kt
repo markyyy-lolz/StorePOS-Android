@@ -1864,8 +1864,10 @@ private fun ProductList(
     val softwareKeyboard = LocalSoftwareKeyboardController.current
     // The scanner can deliver its final character and Enter in the same
     // frame, before Compose has recomposed the query String parameter.
+    // Input events update this buffer synchronously; do not overwrite it
+    // in a composition effect, which might run between the last character
+    // and a scanner's immediate Enter suffix.
     val pendingHidInput = remember { mutableStateOf(query) }
-    SideEffect { pendingHidInput.value = query }
 
     fun submitKeyboardScan(code: String) {
         pendingHidInput.value = ""
