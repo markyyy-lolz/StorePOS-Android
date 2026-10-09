@@ -13,7 +13,7 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
     "motopos_offline.db",
     null,
-    1
+    2
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -34,15 +34,43 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             """
             create table pending_sales(
               id text primary key,
+              shop_id text not null,
               payload text not null,
               created_at integer not null,
-              last_error text
+              last_error text,
+              review_state text not null default 'queued'
             )
             """.trimIndent()
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("alter table pending_sales add column shop_id text")
+            db.execSQL("alter table pending_sales add column review_state text not null default 'needs_review'")
+            // Pre-v1.8.0 offline sales may predate the Sherine Store catalog
+            // reset. Keep all original payloads but NEVER replay them blindly.
+            // A manager can reconcile and re-enter verified sales manually.
+            db.query("pending_sales", arrayOf("id", "payload"), null, null, null, null, null)
+                .use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val shop = runCatching {
+                            json.decodeFromString<OfflineSalePayload>(cursor.getString(1)).shopId
+                        }.getOrNull()
+                        db.update(
+                            "pending_sales",
+                            ContentValues().apply {
+                                if (shop != null) put("shop_id", shop)
+                                put("review_state", "needs_review")
+                                put("last_error", "Legacy sale requires manager review after database reset.")
+                            },
+                            "id=?",
+                            arrayOf(cursor.getString(0))
+                        )
+                    }
+                }
+        }
+    }
 
     private fun putBlob(key: String, payload: String) {
         writableDatabase.insertWithOnConflict(
@@ -101,6 +129,8 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             null,
             ContentValues().apply {
                 put("id", payload.clientKey)
+                put("shop_id", payload.shopId)
+                put("review_state", "queued")
                 put("payload", json.encodeToString(payload))
                 put("created_at", System.currentTimeMillis())
                 putNull("last_error")
@@ -109,12 +139,19 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
         )
     }
 
-    fun pendingSales(): List<PendingOfflineSale> =
+    /** A cashier must never sync pending transactions belonging to another shop. */
+    fun pendingSales(shopId: String): List<PendingOfflineSale> =
+        readSales(shopId, "queued")
+
+    fun needsReview(shopId: String): List<PendingOfflineSale> =
+        readSales(shopId, "needs_review")
+
+    private fun readSales(shopId: String, status: String): List<PendingOfflineSale> =
         readableDatabase.query(
             "pending_sales",
             arrayOf("id", "payload", "created_at", "last_error"),
-            null,
-            null,
+            "shop_id=? and review_state=?",
+            arrayOf(shopId, status),
             null,
             null,
             "created_at asc"
@@ -136,16 +173,28 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             }
         }
 
-    fun removePendingSale(id: String) {
-        writableDatabase.delete("pending_sales", "id=?", arrayOf(id))
+    fun markNeedsReview(shopId: String, id: String, reason: String) {
+        writableDatabase.update(
+            "pending_sales",
+            ContentValues().apply {
+                put("review_state", "needs_review")
+                put("last_error", reason.take(500))
+            },
+            "id=? and shop_id=?",
+            arrayOf(id, shopId)
+        )
     }
 
-    fun setPendingError(id: String, error: String?) {
+    fun removePendingSale(shopId: String, id: String) {
+        writableDatabase.delete("pending_sales", "id=? and shop_id=?", arrayOf(id, shopId))
+    }
+
+    fun setPendingError(shopId: String, id: String, error: String?) {
         writableDatabase.update(
             "pending_sales",
             ContentValues().apply { put("last_error", error?.take(500)) },
-            "id=?",
-            arrayOf(id)
+            "id=? and shop_id=?",
+            arrayOf(id, shopId)
         )
     }
 }
