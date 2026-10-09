@@ -43,6 +43,7 @@ import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
+import com.storepos.app.printing.ReceiptCutSettings
 import com.storepos.app.printing.BluetoothReceiptPrinter
 import com.storepos.app.printing.PrinterDevice
 import com.storepos.app.printing.PdfReceiptLine
@@ -429,7 +430,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             showPaymentReference = settings.receiptShowPaymentReference,
             showDigitalQr = settings.receiptShowDigitalQr,
             compactMode = settings.receiptCompactMode,
-            sectionOrder = settings.receiptSectionOrder
+            sectionOrder = settings.receiptSectionOrder,
+            footerFeedLines = ReceiptCutSettings.get(androidContext)
         )
         if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
             val printerQueue = com.storepos.app.printing.SharedPrintRepository
