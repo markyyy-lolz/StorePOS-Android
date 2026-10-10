@@ -13,7 +13,7 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
     "motopos_offline.db",
     null,
-    3
+    4
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -43,6 +43,22 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             """.trimIndent()
         )
         createOfflineReceiptTable(db)
+        createOfflineInventoryTable(db)
+    }
+
+    private fun createOfflineInventoryTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """create table if not exists pending_inventory(
+              id text primary key,
+              shop_id text not null,
+              actor_id text not null,
+              payload text not null,
+              created_at integer not null,
+              last_error text,
+              review_state text not null default 'queued'
+            )""".trimIndent()
+        )
+        db.execSQL("create index if not exists idx_inv_shop on pending_inventory(shop_id,review_state,created_at)")
     }
 
     private fun createOfflineReceiptTable(db: SQLiteDatabase) {
@@ -87,6 +103,7 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
                 }
         }
         if (oldVersion < 3) createOfflineReceiptTable(db)
+        if (oldVersion < 4) createOfflineInventoryTable(db)
     }
 
     private fun putBlob(key: String, payload: String) {
@@ -166,6 +183,81 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     // permit an offline checkout after Sherine Store's product reset.
     fun isProductCacheTrusted(shopId: String): Boolean =
         cachedCatalogEpoch(shopId) != null
+
+    /** Mutation plus optimistic catalog snapshot must commit together. */
+    fun enqueueInventory(ops: List<OfflineInventoryOperation>, nextProducts: List<Product>) {
+        require(ops.isNotEmpty() && ops.map { it.id }.distinct().size == ops.size)
+        val shop=ops.first().shopId
+        val actor=ops.first().actorId
+        val epoch=cachedCatalogEpoch(shop) ?: error("Connect once to verify product catalog before offline inventory.")
+        require(ops.all { it.shopId==shop && it.actorId==actor &&
+            it.catalogEpoch==epoch && it.id.isNotBlank() }) { "Different shop/operator in offline inventory batch." }
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            val timestamp=System.currentTimeMillis()
+            for (op in ops) {
+                db.insertOrThrow("pending_inventory",null,ContentValues().apply {
+                    put("id",op.id);put("shop_id",op.shopId);put("actor_id",op.actorId)
+                    put("payload",json.encodeToString(op));put("created_at",timestamp)
+                    put("review_state","queued")
+                })
+            }
+            db.insertWithOnConflict("cache_blob",null,ContentValues().apply {
+                put("cache_key","products:$shop")
+                put("payload",json.encodeToString(nextProducts))
+                put("updated_at",timestamp)
+            },SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun pendingInventory(shopId:String):List<PendingOfflineInventoryOperation> =
+        readInventory(shopId,"queued")
+
+    fun needsReviewInventory(shopId:String):List<PendingOfflineInventoryOperation> =
+        readInventory(shopId,"needs_review")
+
+    private fun readInventory(shopId:String,status:String):List<PendingOfflineInventoryOperation> =
+        readableDatabase.query(
+            "pending_inventory",arrayOf("payload","created_at","last_error"),
+            "shop_id=? and review_state=?",arrayOf(shopId,status),
+            null,null,"created_at asc,rowid asc"
+        ).use { c ->
+            buildList {
+                while(c.moveToNext()) {
+                    val item=runCatching {
+                        json.decodeFromString<OfflineInventoryOperation>(c.getString(0))
+                    }.getOrNull() ?: continue
+                    add(PendingOfflineInventoryOperation(item,c.getLong(1),c.getString(2)))
+                }
+            }
+        }
+
+    fun markInventoryReview(shopId:String,opId:String,reason:String) {
+        writableDatabase.update("pending_inventory",ContentValues().apply {
+            put("review_state","needs_review")
+            put("last_error",reason.take(500))
+        },"shop_id=? and id=?",arrayOf(shopId,opId))
+    }
+
+    fun setInventoryError(shopId:String,opId:String,reason:String) {
+        writableDatabase.update("pending_inventory",ContentValues().apply {
+            put("last_error",reason.take(500))
+        },"shop_id=? and id=?",arrayOf(shopId,opId))
+    }
+
+    fun removePendingInventory(shopId:String,opId:String) {
+        writableDatabase.delete("pending_inventory","shop_id=? and id=?",arrayOf(shopId,opId))
+    }
+
+    fun saveCategories(shopId:String,categories:List<ProductCategory>) =
+        putBlob("categories:$shopId",json.encodeToString(categories))
+
+    fun loadCategories(shopId:String):List<ProductCategory> =
+        getBlob("categories:$shopId")?.let {
+            runCatching { json.decodeFromString<List<ProductCategory>>(it) }.getOrDefault(emptyList())
+        } ?: emptyList()
 
     fun loadProducts(shopId: String): List<Product> =
         getBlob("products:$shopId")?.let {
