@@ -106,6 +106,8 @@ declare
   v_line record;
   v_price numeric;
   v_available numeric;
+  v_quote jsonb;
+  v_result jsonb;
 begin
   if v_user is null or v_user is distinct from p_cashier_id then
     raise exception 'HYBRID_CASHIER_MISMATCH: original cashier must sign in to reconcile';
@@ -200,19 +202,38 @@ begin
     where p.shop_id=p_shop_id and p.track_stock and p.stock_quantity<q.sold
   ) then raise exception 'HYBRID_STOCK_REVIEW: insufficient stock; manual reconciliation required';
   end if;
-  -- All work including inventory mutations is in this one PostgreSQL txn.
-  return query select * from public.complete_sale_transaction_v3(
-    p_client_key=>p_client_key,
-    p_shop_id=>p_shop_id,
-    p_customer_id=>nullif(p_payload->>'customer_id','')::uuid,
-    p_motorcycle_id=>nullif(p_payload->>'motorcycle_id','')::uuid,
-    p_job_order_id=>nullif(p_payload->>'job_order_id','')::uuid,
-    p_discount_amount=>coalesce((p_payload->>'discount_amount')::numeric,0),
-    p_tax_amount=>coalesce((p_payload->>'tax_amount')::numeric,0),
-    p_manager_pin=>null,
-    p_items=>p_payload->'items',
-    p_payments=>p_payload->'payments'
+  -- Use StorePOS's normal retail engine, NOT the bare generic sale RPC.
+  -- This also produces retail_sale_details/receipt_token and respects existing
+  -- cash-shift, retail pricing and register accounting invariants.
+  v_quote:=app_private.retail_quote(p_shop_id,jsonb_build_object(
+    'items',p_payload->'items',
+    'discount',coalesce((p_payload->>'discount_amount')::numeric,0),
+    'charges','[]'::jsonb
+  ));
+  if abs((v_quote->>'tax')::numeric -
+         coalesce((p_payload->>'tax_amount')::numeric,0))>0.009 then
+    raise exception 'HYBRID_TAX_REVIEW: shop tax configuration changed since offline checkout';
+  end if;
+  if abs((v_quote->>'total')::numeric -
+    (select coalesce(sum((pay->>'amount')::numeric),0)
+     from jsonb_array_elements(p_payload->'payments') pay))>0.009 then
+    raise exception 'HYBRID_TOTAL_REVIEW: offline cash total differs from cloud quote';
+  end if;
+  v_result:=app_private.retail_checkout(p_shop_id,
+    jsonb_build_object(
+      'client_key',p_client_key,
+      'items',p_payload->'items',
+      'discount',coalesce((p_payload->>'discount_amount')::numeric,0),
+      'charges','[]'::jsonb,
+      'payments',p_payload->'payments',
+      'customer_id',nullif(p_payload->>'customer_id','')
+    )
   );
+  select * into v_sale from public.sales
+    where id=(v_result->'sale'->>'id')::uuid and shop_id=p_shop_id;
+  if v_sale.id is null then raise exception 'HYBRID_REVIEW: retail checkout did not return a sale'; end if;
+  return next v_sale;
+  return;
 end;
 $$;
 revoke all on function public.storepos_hybrid_reconcile_sale(uuid,uuid,uuid,uuid,jsonb)
