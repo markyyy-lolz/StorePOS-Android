@@ -29,7 +29,7 @@ create policy storepos_hybrid_epoch_member_read on public.storepos_hybrid_epochs
 -- New StorePOS shops receive their own generation automatically.
 create or replace function public.storepos_hybrid_new_shop()
 returns trigger language plpgsql security definer set search_path=''
-as $
+as $$
 begin
   if new.app_code='storepos' then
     insert into public.storepos_hybrid_epochs(shop_id) values(new.id)
@@ -37,7 +37,7 @@ begin
   end if;
   return new;
 end;
-$;
+$$;
 revoke all on function public.storepos_hybrid_new_shop() from public,anon,authenticated;
 drop trigger if exists storepos_hybrid_new_shop on public.shops;
 create trigger storepos_hybrid_new_shop after insert on public.shops
