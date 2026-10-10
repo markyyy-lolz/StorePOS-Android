@@ -79,4 +79,44 @@ class OfflineSyncPolicyTest {
             catalog
         ))
     }
+    @Test fun newHybridSalesHaveCashierAndTrustedEpoch() {
+        val sale = sale().copy(
+            cashierId="cashier-a",
+            catalogEpoch="123e4567-e89b-12d3-a456-426614174000"
+        )
+        assertNull(OfflineSyncPolicy.localReviewReason(shop,sale))
+        assertTrue(OfflineSyncPolicy.localReviewReason(shop,
+            sale.copy(catalogEpoch=null))!!.contains("Legacy"))
+        assertTrue(OfflineSyncPolicy.localReviewReason(shop,
+            sale.copy(cashierId=null))!!.contains("cashier"))
+    }
+
+    @Test fun syncDoesNotPreemptivelyRejectPostedSaleBasedOnCurrentCloudStock() {
+        val postedThenTimedOut = sale(items=listOf(SaleRpcItem("p1",2.0,39.0))).copy(
+            cashierId="cashier-a",
+            catalogEpoch="123e4567-e89b-12d3-a456-426614174000"
+        )
+        // Cloud might already have decremented stock before losing the response;
+        // only server's idempotency ledger can distinguish that from a second sale.
+        assertNull(OfflineSyncPolicy.localReviewReason(shop,postedThenTimedOut))
+        assertTrue(OfflineSyncPolicy.reviewReason(shop,postedThenTimedOut,
+            catalog.map { if (it.id=="p1") it.copy(stockQuantity=0.0) else it })!!
+            .contains("Insufficient cloud stock"))
+    }
+
+    @Test fun incompleteOfflineCashPayloadCannotUpload() {
+        val good = sale().copy(
+            cashierId="cashier-a",
+            catalogEpoch="123e4567-e89b-12d3-a456-426614174000"
+        )
+        assertTrue(OfflineSyncPolicy.localReviewReason(shop,
+            good.copy(items=listOf(SaleRpcItem("p1",1.0,null))))!!
+            .contains("price"))
+        assertTrue(OfflineSyncPolicy.localReviewReason(shop,
+            good.copy(payments=listOf(CheckoutPayment(method="gcash",amount=39.0))))!!
+            .contains("cash"))
+        assertTrue(OfflineSyncPolicy.localReviewReason(other,good)!!
+            .contains("another shop"))
+    }
+
 }
