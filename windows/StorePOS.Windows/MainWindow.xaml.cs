@@ -72,8 +72,10 @@ public partial class MainWindow : Window
     void RequireTrading(bool inventory=false,bool manager=false) {
         if(_shop==null || _license==null)throw new InvalidOperationException("Sign in and activate your device first.");
         if(!_license.Valid)throw new InvalidOperationException("A valid StorePOS license is required.");
-        if(!_online && !_license.AllowsOffline(DateTimeOffset.UtcNow))
-            throw new InvalidOperationException("Offline license grace expired. Reconnect and verify the subscription.");
+        // Always enforce cached license expiry and monotonic wall-clock policy,
+        // including when Windows still shows a previously online state.
+        if(!_license.AllowsOffline(DateTimeOffset.UtcNow))
+            throw new InvalidOperationException("License expired, offline grace elapsed, or device clock moved backward. Reconnect for verification.");
         if(_store.TrustedEpoch(_shop.ShopId)==null)
             throw new InvalidOperationException("Sign in online once to cache the catalog and shop generation.");
         var role=_shop.Role;
