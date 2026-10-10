@@ -372,15 +372,13 @@ fun InventoryPage(context: ShopContext) {
                 scope.launch {
                     error = null
                     runCatching {
-                        if(offlineMode) {
-                            products=OfflineInventoryActions.add(offlineStore,context.shop.id,
-                                context.userId,context.member.role,products,input)
-                            OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
-                            pendingInventory=offlineStore.pendingInventory(context.shop.id).size
-                        } else {
-                            StoreRepository.addProduct(input)
-                            refresh()
-                        }
+                        // Queue FIRST even when online, so a lost RPC acknowledgement
+                        // cannot create a duplicate product or double opening stock.
+                        products=OfflineInventoryActions.add(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,input)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                        if(!offlineMode) runCatching { refresh() }
                     }.onSuccess { addOpen=false }
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
@@ -397,15 +395,11 @@ fun InventoryPage(context: ShopContext) {
                 scope.launch {
                     error = null
                     runCatching {
-                        if(offlineMode) {
-                            products=OfflineInventoryActions.edit(offlineStore,context.shop.id,
-                                context.userId,context.member.role,products,updated)
-                            OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
-                            pendingInventory=offlineStore.pendingInventory(context.shop.id).size
-                        }else {
-                            StoreRepository.updateProduct(updated)
-                            refresh()
-                        }
+                        products=OfflineInventoryActions.edit(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,updated)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                        if(!offlineMode) runCatching { refresh() }
                     }.onSuccess { editProduct=null }
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
@@ -453,15 +447,11 @@ fun InventoryPage(context: ShopContext) {
                 scope.launch {
                     error = null
                     runCatching {
-                        if(offlineMode) {
-                            products=OfflineInventoryActions.adjust(offlineStore,context.shop.id,
-                                context.userId,context.member.role,products,product.id,delta,reason,notes)
-                            OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
-                            pendingInventory=offlineStore.pendingInventory(context.shop.id).size
-                        }else {
-                            StoreRepository.adjustInventoryStock(product.id,delta,reason,notes)
-                            refresh()
-                        }
+                        products=OfflineInventoryActions.adjust(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,product.id,delta,reason,notes)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                        if(!offlineMode) runCatching { refresh() }
                     }.onSuccess { stockProduct=null }
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
