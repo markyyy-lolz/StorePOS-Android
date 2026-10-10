@@ -1241,3 +1241,82 @@ private fun StocktakeDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }
+
+
+/**
+ * Partial offline stocktake. Blank SKUs are NOT interpreted as zero.
+ * Each submitted product carries its local expected quantity; changed cloud
+ * stock (including sales from the second tablet) requires manager review.
+ */
+@Composable
+private fun OfflinePhysicalCountDialog(
+    products:List<Product>,
+    onDismiss:()->Unit,
+    onSave:(Map<String,Double>)->Unit
+) {
+    var values by remember { mutableStateOf<Map<String,String>>(emptyMap()) }
+    var scanNotice by remember { mutableStateOf<String?>(null) }
+    val scan=rememberLauncherForActivityResult(ScanContract()) { response->
+        val barcode=response.contents?.trim().orEmpty()
+        val matched=products.firstOrNull {
+            it.sku.equals(barcode,true) || it.barcode.equals(barcode,true)
+        }
+        if(matched==null)scanNotice="Barcode not found in offline stocktake: $barcode"
+        else {
+            val old=values[matched.id]?.toDoubleOrNull() ?: 0.0
+            values=values+(matched.id to (old+1.0).toString())
+            scanNotice="Counted +1: ${matched.name}"
+        }
+    }
+    val parsed=values.mapNotNull { (id,value) ->
+        value.toDoubleOrNull()?.takeIf { it.isFinite() && it>=0 }?.let { id to it }
+    }.toMap()
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        title={Text("Offline physical stocktake")},
+        text={
+            Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("Scan or enter quantities for counted products ONLY. Uncounted items stay unchanged. " +
+                    "Cloud stock that changed on another device will require manager review.",
+                    style=MaterialTheme.typography.bodySmall)
+                Button(onClick={
+                    scan.launch(ScanOptions().setPrompt("Scan physical stock").setBeepEnabled(true))
+                },modifier=Modifier.fillMaxWidth()) { Text("Scan counted item +1") }
+                scanNotice?.let { Text(it,style=MaterialTheme.typography.bodySmall) }
+                LazyColumn(
+                    modifier=Modifier.heightIn(max=370.dp),
+                    verticalArrangement=Arrangement.spacedBy(5.dp)
+                ) {
+                    items(products,key={it.id}) { item->
+                        Row(verticalAlignment=Alignment.CenterVertically,
+                            horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.name,fontWeight=FontWeight.Bold)
+                                Text("Local expected: ${item.stockQuantity} • ${item.sku}",
+                                    style=MaterialTheme.typography.bodySmall)
+                            }
+                            OutlinedTextField(
+                                value=values[item.id].orEmpty(),
+                                onValueChange={ v-> values=values+(item.id to v) },
+                                label={Text("Counted")},
+                                placeholder={Text("—")},
+                                keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),
+                                singleLine=true,modifier=Modifier.width(120.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton={
+            Button(onClick={onSave(parsed)},
+                enabled=parsed.isNotEmpty() &&
+                    values.all { (id,v)->v.isBlank() ||
+                        (products.any { it.id==id } && v.toDoubleOrNull()?.let {
+                            it.isFinite() && it>=0.0
+                        }==true) }
+            ) { Text("Save offline stocktake") }
+        },
+        dismissButton={TextButton(onClick=onDismiss){Text("Cancel")}}
+    )
+}
