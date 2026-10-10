@@ -713,6 +713,29 @@ data class HybridCatalogEpoch(
 )
 
 @Serializable
+data class OfflineInventoryOperation(
+    val id: String,
+    val shopId: String,
+    val actorId: String,
+    val catalogEpoch: String,
+    val kind: String,
+    val productId: String,
+    val before: Product? = null,
+    val after: Product? = null,
+    val delta: Double? = null,
+    val expectedStock: Double? = null,
+    val countedStock: Double? = null,
+    val reason: String = "adjustment",
+    val notes: String? = null
+)
+
+data class PendingOfflineInventoryOperation(
+    val operation: OfflineInventoryOperation,
+    val createdAt: Long,
+    val lastError: String? = null
+)
+
+@Serializable
 data class OfflineSalePayload(
     @SerialName("client_key") val clientKey: String,
     @SerialName("shop_id") val shopId: String,
