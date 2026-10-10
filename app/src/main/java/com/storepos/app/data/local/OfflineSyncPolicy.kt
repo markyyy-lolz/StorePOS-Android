@@ -12,6 +12,28 @@ import kotlin.math.abs
 object OfflineSyncPolicy {
     const val REVIEW_PREFIX = "NEEDS_REVIEW: "
 
+    /**
+     * Validate immutable cash outbox format locally. Never reject a retry
+     * against CURRENT product stock before checking the server idempotency
+     * ledger: the online request may already have committed before timeout.
+     * Price, catalog-epoch and quantity locks are enforced by the cloud RPC.
+     */
+    fun localReviewReason(shopId: String, payload: OfflineSalePayload): String? {
+        if (shopId != payload.shopId) return "Offline sale belongs to another shop."
+        if (payload.catalogEpoch.isNullOrBlank())
+            return "Legacy/pre-reset offline sale is missing verified catalog epoch."
+        if (payload.cashierId.isNullOrBlank())
+            return "Offline sale has no original cashier identity."
+        if (payload.items.isEmpty() || payload.items.any {
+            it.quantity <= 0 || !it.quantity.isFinite() ||
+                it.unitPrice == null || it.unitPrice < 0 || !it.unitPrice.isFinite()
+        }) return "Offline sale lines have invalid or missing price/quantity snapshots."
+        if (payload.payments.isEmpty() || payload.payments.any {
+            it.method != "cash" || it.amount <= 0 || !it.amount.isFinite()
+        }) return "Offline replay only accepts valid cash payments."
+        return null
+    }
+
     fun reviewReason(shopId: String, payload: OfflineSalePayload, products: List<Product>): String? {
         if (shopId != payload.shopId) return "Sale belongs to a different shop."
         if (payload.items.isEmpty()) return "Offline sale is missing product lines."
