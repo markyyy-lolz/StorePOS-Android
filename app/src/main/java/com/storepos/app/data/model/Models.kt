@@ -707,6 +707,12 @@ data class CompleteSaleRpcParams(
 
 
 @Serializable
+data class HybridCatalogEpoch(
+    @SerialName("shop_id") val shopId: String,
+    val epoch: String
+)
+
+@Serializable
 data class OfflineSalePayload(
     @SerialName("client_key") val clientKey: String,
     @SerialName("shop_id") val shopId: String,
@@ -720,7 +726,8 @@ data class OfflineSalePayload(
     @SerialName("payment_method") val paymentMethod: String,
     @SerialName("reference_number") val referenceNumber: String? = null,
     val items: List<SaleRpcItem>,
-    val payments: List<CheckoutPayment> = emptyList()
+    val payments: List<CheckoutPayment> = emptyList(),
+    @SerialName("catalog_epoch") val catalogEpoch: String? = null
 )
 
 data class PendingOfflineSale(
