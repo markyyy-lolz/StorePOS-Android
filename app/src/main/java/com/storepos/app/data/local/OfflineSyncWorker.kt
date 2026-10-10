@@ -28,8 +28,9 @@ class OfflineSyncWorker(appContext: Context, params: WorkerParameters) :
         return try {
             AppSessionRetention.enforceOnColdStart(applicationContext)
             val store = OfflineStore(applicationContext)
+            val inventory = OfflineInventorySynchronizer.syncShop(shopId,store)
             val summary = OfflineSaleSynchronizer.syncShop(shopId, store)
-            if (summary.retryLater) Result.retry() else Result.success()
+            if (summary.retryLater || inventory.retry) Result.retry() else Result.success()
         } catch (_: Throwable) {
             Result.retry()
         }
