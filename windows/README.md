@@ -4,7 +4,7 @@ Native C# / .NET 10 WPF Windows 10/11 x64 application in the existing StorePOS G
 
 ## Architecture
 - Backend: existing StorePOS Supabase project qgyzdoltjlryjthxxscw (NOT the BrewPOS DB). Only memberships with app_code=storepos are accepted.
-- Auth: Supabase Auth email/password, using a real user JWT (never a service-role key). The production Auth CAPTCHA may require a hosted Turnstile challenge handoff; v1.0.0 includes an optional token entry field but does NOT yet offer embedded CAPTCHA.
+- Auth: Supabase Auth email/password with a regular staff JWT (never a service-role key), and embedded Microsoft Edge WebView2 loading the SAME hosted StorePOS Turnstile URL/callback as Android. The actual production sign-in remains unverified until a real staff account and Cloudflare challenge are tested on Windows. WebView2 Runtime must be present.
 - Licensing: existing validate_device_access and activate_device_access RPCs, bound to a stable per-installation Windows device UUID. Offline grace and actual expiry checked against cached server verification; reject clock rollback.
 - Offline storage: SQLite WAL in %LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3. The Windows installer never deletes this database.
 - Cash: each sale, immutable UUID, receipt, cashier identity, stock decrement and retryable outbox entry commit as one local transaction. Sync uses storepos_hybrid_reconcile_sale. Only basic cash sales are allowed offline.

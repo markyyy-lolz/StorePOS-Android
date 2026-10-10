@@ -1,0 +1,4 @@
+publish/
+artifacts/
+**/bin/
+**/obj/
