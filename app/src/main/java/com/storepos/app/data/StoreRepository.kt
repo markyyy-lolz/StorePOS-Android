@@ -1091,12 +1091,14 @@ object StoreRepository {
      * validates owner/inventory permissions and catalog epoch, then writes a
      * movement/product update and immutable idempotency journal atomically.
      */
+    private val inventorySnapshotJson = Json { encodeDefaults = true }
+
     suspend fun reconcileOfflineInventory(op: OfflineInventoryOperation) {
         require(op.kind in setOf("create","edit","adjust","count"))
         val data = buildJsonObject {
             put("product_id",op.productId)
-            op.before?.let { put("before",Json.encodeToJsonElement(it)) }
-            op.after?.let { put("after",Json.encodeToJsonElement(it)) }
+            op.before?.let { put("before",inventorySnapshotJson.encodeToJsonElement(it)) }
+            op.after?.let { put("after",inventorySnapshotJson.encodeToJsonElement(it)) }
             op.delta?.let { put("delta",it) }
             op.expectedStock?.let { put("expected_stock",it) }
             op.countedStock?.let { put("counted_stock",it) }
