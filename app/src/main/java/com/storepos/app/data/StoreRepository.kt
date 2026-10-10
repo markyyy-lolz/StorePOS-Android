@@ -9,6 +9,7 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.result.decodeAs
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.Json
@@ -1086,6 +1087,36 @@ object StoreRepository {
 
 
     /** StorePOS hybrid catalog generation, scoped by the current Auth shop membership. */
+    /**
+     * Replays exactly one inventory event. PostgreSQL serializes the UUID,
+     * validates owner/inventory permissions and catalog epoch, then writes a
+     * movement/product update and immutable idempotency journal atomically.
+     */
+    suspend fun reconcileOfflineInventory(op: OfflineInventoryOperation) {
+        require(op.kind in setOf("create","edit","adjust","count"))
+        val data = buildJsonObject {
+            put("product_id",op.productId)
+            op.before?.let { put("before",Json.encodeToJsonElement(it)) }
+            op.after?.let { put("after",Json.encodeToJsonElement(it)) }
+            op.delta?.let { put("delta",it) }
+            op.expectedStock?.let { put("expected_stock",it) }
+            op.countedStock?.let { put("counted_stock",it) }
+            put("reason",op.reason)
+            op.notes?.let { put("notes",it) }
+        }
+        client.postgrest.rpc(
+            function="storepos_reconcile_inventory",
+            parameters=buildJsonObject {
+                put("p_operation_id",op.id)
+                put("p_shop_id",op.shopId)
+                put("p_actor_id",op.actorId)
+                put("p_epoch",op.catalogEpoch)
+                put("p_kind",op.kind)
+                put("p_data",data)
+            }
+        ).decodeAs<JsonObject>()
+    }
+
     suspend fun hybridCatalogEpoch(shopId: String): String =
         client.from("storepos_hybrid_epochs").select {
             filter { eq("shop_id",shopId) }
