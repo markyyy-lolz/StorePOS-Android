@@ -62,6 +62,7 @@ fun InventoryPage(context: ShopContext) {
     var pendingInventory by remember(context.shop.id) { mutableIntStateOf(0) }
     var reviewInventory by remember(context.shop.id) { mutableIntStateOf(0) }
     var offlineStocktakeOpen by remember { mutableStateOf(false) }
+    var showInventoryQueue by remember { mutableStateOf(false) }
     val inventoryManager=context.member.role.lowercase() in setOf("owner","admin","manager")
     val inventoryStaff=context.member.role.lowercase() in setOf("owner","admin","manager","inventory")
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
@@ -244,6 +245,11 @@ fun InventoryPage(context: ShopContext) {
                 "Cash sales and inventory may conflict with another tablet; conflicts require manager review.",
             color=MaterialTheme.colorScheme.primary
         )
+        if(pendingInventory>0 || reviewInventory>0) {
+            OutlinedButton(onClick={showInventoryQueue=true}) {
+                Text("View inventory sync ($pendingInventory queued, $reviewInventory needs review)")
+            }
+        }
         if(reviewInventory>0) Text(
             "$reviewInventory inventory change(s) require manager review. " +
                 "Keep this tablet's SQLite data; do not uninstall or clear app storage.",
@@ -347,6 +353,14 @@ fun InventoryPage(context: ShopContext) {
                 }
             }
         }
+    }
+
+    if(showInventoryQueue) {
+        OfflineInventoryQueueDialog(
+            waiting=offlineStore.pendingInventory(context.shop.id),
+            review=offlineStore.needsReviewInventory(context.shop.id),
+            onDismiss={showInventoryQueue=false}
+        )
     }
 
     if (addOpen) {
