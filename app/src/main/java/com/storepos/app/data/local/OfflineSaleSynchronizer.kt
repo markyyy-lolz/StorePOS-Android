@@ -35,11 +35,11 @@ object OfflineSaleSynchronizer {
             val signedInCashier = StoreRepository.currentUserId()
                 ?: return@withLock snapshot(shopId, store, 0, true, "Sign in to sync pending sales.")
 
-            val liveProducts = try {
-                StoreRepository.products(shopId)
-            } catch (failure: Throwable) {
-                return@withLock snapshot(shopId, store, 0, true, "Awaiting StorePOS Cloud connection.")
-            }
+            // Do not preflight using current stock before the idempotency
+            // check. A timed-out ONLINE sale might already be posted, making
+            // cloud stock lower than when the offline payload was created.
+            // The atomic RPC checks existing client key FIRST, then catalog
+            // epoch, prices and locked inventory in a single transaction.
 
             var successful = 0
             var shouldRetry = false
@@ -58,7 +58,7 @@ object OfflineSaleSynchronizer {
                     continue
                 }
 
-                val review = OfflineSyncPolicy.reviewReason(shopId, record.payload, liveProducts)
+                val review = OfflineSyncPolicy.localReviewReason(shopId, record.payload)
                 if (review != null) {
                     store.markNeedsReview(shopId, record.id, review)
                     continue
