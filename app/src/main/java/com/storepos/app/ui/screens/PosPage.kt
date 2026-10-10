@@ -293,6 +293,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     suspend fun refresh() {
         try {
+            val epochBefore = StoreRepository.hybridCatalogEpoch(context.shop.id)
             coroutineScope {
                 val p = async { StoreRepository.products(context.shop.id) }
                 val c = async { StoreRepository.customers(context.shop.id) }
@@ -313,8 +314,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 retailPromos = rp.await()
                 retailFavorites = rf.await()
             }
-            offlineStore.saveProducts(context.shop.id, products)
-            offlineStore.markProductCacheTrusted(context.shop.id)
+            // Take an epoch snapshot on BOTH sides of the catalog download.
+            // Never trust a half-refreshed cache if products reset during fetch.
+            val epochAfter = StoreRepository.hybridCatalogEpoch(context.shop.id)
+            check(epochBefore == epochAfter) {
+                "Catalog changed during cloud refresh. Retry while online."
+            }
+            offlineStore.saveTrustedProducts(context.shop.id, products, epochAfter)
             offlineStore.saveCustomers(context.shop.id, customers)
             offlineStore.saveMotorcycles(context.shop.id, motorcycles)
 
@@ -1853,7 +1859,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 items = soldCart.map {
                                     SaleRpcItem(it.product.id, it.quantity, it.unitPrice)
                                 },
-                                payments = payments
+                                payments = payments,
+                                catalogEpoch = offlineStore.cachedCatalogEpoch(context.shop.id)
+                                    ?: error("Trusted catalog epoch missing. Reconnect before selling.")
                             )
                             val paperWidth = prefs.getInt(
                                 "paper_width", settings.printerPaperWidthMm
