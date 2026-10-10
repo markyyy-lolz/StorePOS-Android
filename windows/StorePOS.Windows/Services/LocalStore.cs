@@ -142,7 +142,7 @@ public sealed class LocalStore
     static object BeforeAfter(Product p)=>p.ToCloud();
     static string ToJson(object obj)=>JsonSerializer.Serialize(obj,StorePOSConfig.Json);
 
-    public QueueItem QueueCashSale(ShopContext ctx,IReadOnlyList<CartLine> cart,decimal tendered) {
+    public QueueItem QueueCashSale(ShopContext ctx,IReadOnlyList<CartLine> cart,decimal tendered,int paperWidth=80) {
         if(!AuditRules.CanSell(ctx.Role))throw new InvalidOperationException("Cashier permission required.");
         var epoch=TrustedEpoch(ctx.ShopId)
             ??throw new InvalidOperationException("Download a trusted catalog while online first.");
@@ -160,7 +160,9 @@ public sealed class LocalStore
         var receiptId="OFF-WIN-"+key.ToString("N")[..10].ToUpperInvariant();
         var sale=new LocalSale(key,ctx.ShopId,ctx.UserId,epoch,cart.ToList(),tendered,tax,
             DateTimeOffset.UtcNow,receiptId);
-        var receipt=ReceiptPrinter.Format(ctx.ShopName,sale);
+        if(paperWidth is not (58 or 80))
+            throw new InvalidOperationException("Unsupported paper width.");
+        var receipt=ReceiptPrinter.Format(ctx.ShopName,sale,paperWidth==58?32:42);
         // p_payload schema mirrors Android / Supabase's StorePOS hybrid cash RPC.
         var payload=ToJson(new {
             client_key=key,shop_id=ctx.ShopId,cashier_id=ctx.UserId,
