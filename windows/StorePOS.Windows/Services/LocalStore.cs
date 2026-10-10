@@ -13,8 +13,8 @@ public sealed class LocalStore
 {
     readonly string _database;
     public string Root {get;}
-    public LocalStore() {
-        Root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    public LocalStore(string? isolatedDataDirectory=null) {
+        Root=isolatedDataDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Azurate","StorePOS.Windows");
         Directory.CreateDirectory(Root);
         _database=Path.Combine(Root,"storepos.sqlite3");
