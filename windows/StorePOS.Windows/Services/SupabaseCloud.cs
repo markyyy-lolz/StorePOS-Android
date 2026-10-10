@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -50,7 +51,7 @@ public sealed class SupabaseCloud
         bool.TryParse(Read(e,name),out var value)?value:fallback;
 
     public async Task<AuthSession> SignIn(string email,string password,string? captchaToken=null) {
-        var data=new Dictionary<string,object> {["email"]=email,["password"]=password,["gotrue_meta_security"] = new {}};
+        var data=new Dictionary<string,object> {["email"]=email,["password"]=password};
         if(!string.IsNullOrWhiteSpace(captchaToken))data["gotrue_meta_security"]=new {captcha_token=captchaToken.Trim()};
         var json=await Send(HttpMethod.Post,"auth/v1/token?grant_type=password",data,false);
         var session=ParseSession(json,email);
