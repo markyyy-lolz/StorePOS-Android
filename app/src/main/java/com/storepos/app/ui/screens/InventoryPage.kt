@@ -1334,3 +1334,50 @@ private fun OfflinePhysicalCountDialog(
         dismissButton={TextButton(onClick=onDismiss){Text("Cancel")}}
     )
 }
+
+
+@Composable
+private fun OfflineInventoryQueueDialog(
+    waiting:List<com.storepos.app.data.model.PendingOfflineInventoryOperation>,
+    review:List<com.storepos.app.data.model.PendingOfflineInventoryOperation>,
+    onDismiss:()->Unit
+) {
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        title={Text("Offline inventory sync status")},
+        text={
+            Column(verticalArrangement=Arrangement.spacedBy(9.dp)) {
+                Text("Queued changes sync with StorePOS Cloud when the original staff account is online. " +
+                    "Conflicts are never overwritten automatically.",
+                    style=MaterialTheme.typography.bodySmall)
+                LazyColumn(
+                    modifier=Modifier.heightIn(max=420.dp),
+                    verticalArrangement=Arrangement.spacedBy(8.dp)
+                ) {
+                    items(waiting+review,key={it.operation.id}) { item->
+                        val blocked=review.any { it.operation.id==item.operation.id }
+                        Surface(shape=RoundedCornerShape(12.dp),tonalElevation=2.dp) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Text(item.operation.kind.uppercase()+
+                                    " • "+item.operation.productId.take(8),
+                                    fontWeight=FontWeight.Bold)
+                                Text(if(blocked) "NEEDS MANAGER REVIEW" else "Pending Cloud Sync",
+                                    color=if(blocked) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.primary)
+                                item.lastError?.let {
+                                    Text(it,style=MaterialTheme.typography.bodySmall)
+                                }
+                                Text("Operation: "+item.operation.id.take(8),
+                                    style=MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+                Text("Do not uninstall StorePOS or clear its app data while offline inventory is pending. " +
+                    "If a conflict occurs, manually reconcile the actual stock with an authorized manager.",
+                    style=MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton={Button(onClick=onDismiss){Text("Close")}}
+    )
+}
