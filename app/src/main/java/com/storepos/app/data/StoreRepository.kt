@@ -1085,63 +1085,69 @@ object StoreRepository {
         }.decodeList<AppVersion>().let(::latestStorePosVersion)
 
 
+    /** StorePOS hybrid catalog generation, scoped by the current Auth shop membership. */
+    suspend fun hybridCatalogEpoch(shopId: String): String =
+        client.from("storepos_hybrid_epochs").select {
+            filter { eq("shop_id",shopId) }
+        }.decodeSingle<HybridCatalogEpoch>().epoch
+
+    /**
+     * CASH outbox replay only. This SQL RPC locks both the shop catalog epoch
+     * and relevant stock rows, and shares the same idempotency ledger/key
+     * used by the regular online retail checkout.
+     *
+     * A legacy payload with no epoch MUST be reviewed, not silently posted.
+     */
     suspend fun completeOfflineSale(payload: OfflineSalePayload): Sale {
-        if (payload.payments.isEmpty()) {
-            return client.postgrest.rpc(
-                function = "complete_sale_transaction_v2",
-                parameters = buildJsonObject {
-                    put("p_client_key", payload.clientKey)
-                    put("p_shop_id", payload.shopId)
-                    payload.customerId?.let { put("p_customer_id", it) }
-                    payload.motorcycleId?.let { put("p_motorcycle_id", it) }
-                    payload.jobOrderId?.let { put("p_job_order_id", it) }
-                    put("p_discount_amount", payload.discountAmount)
-                    put("p_tax_amount", payload.taxAmount)
-                    payload.amountTendered?.let { put("p_amount_tendered", it) }
-                    put("p_payment_method", payload.paymentMethod)
-                    payload.referenceNumber?.trim()?.takeIf { it.isNotBlank() }?.let { put("p_reference_number", it) }
-                    put("p_items", buildJsonArray {
+        val epoch = requireNotNull(payload.catalogEpoch) {
+            "HYBRID_CATALOG_REVIEW: old offline sale needs manager reconciliation"
+        }
+        require(epoch.matches(Regex("^[0-9a-fA-F-]{36}$"))) {
+            "HYBRID_CATALOG_REVIEW: missing trusted catalog epoch"
+        }
+        require(!payload.cashierId.isNullOrBlank()) {
+            "HYBRID_CASHIER_MISMATCH: original cashier is missing"
+        }
+        require(payload.payments.isNotEmpty() && payload.payments.all { it.method=="cash" }) {
+            "HYBRID_INVALID: offline replay supports only verified cash"
+        }
+        return client.postgrest.rpc(
+            function = "storepos_hybrid_reconcile_sale",
+            parameters = buildJsonObject {
+                put("p_client_key",payload.clientKey)
+                put("p_shop_id",payload.shopId)
+                put("p_catalog_epoch",epoch)
+                put("p_cashier_id",payload.cashierId)
+                put("p_payload",buildJsonObject {
+                    put("client_key",payload.clientKey)
+                    put("shop_id",payload.shopId)
+                    put("cashier_id",payload.cashierId)
+                    payload.customerId?.let { put("customer_id",it) }
+                    payload.motorcycleId?.let { put("motorcycle_id",it) }
+                    payload.jobOrderId?.let { put("job_order_id",it) }
+                    put("discount_amount",payload.discountAmount)
+                    put("tax_amount",payload.taxAmount)
+                    put("items",buildJsonArray {
                         payload.items.forEach { line ->
                             add(buildJsonObject {
-                                put("product_id", line.productId)
-                                put("quantity", line.quantity)
-                                line.unitPrice?.let { put("unit_price", it) }
+                                put("product_id",line.productId)
+                                put("quantity",line.quantity)
+                                line.unitPrice?.let { put("unit_price",it) }
                             })
                         }
                     })
-                }
-            ).decodeSingle()
-        }
-
-        return client.postgrest.rpc(
-            function = "complete_sale_transaction_v3",
-            parameters = buildJsonObject {
-                put("p_client_key", payload.clientKey)
-                put("p_shop_id", payload.shopId)
-                payload.customerId?.let { put("p_customer_id", it) }
-                payload.motorcycleId?.let { put("p_motorcycle_id", it) }
-                payload.jobOrderId?.let { put("p_job_order_id", it) }
-                put("p_discount_amount", payload.discountAmount)
-                put("p_tax_amount", payload.taxAmount)
-                put("p_items", buildJsonArray {
-                    payload.items.forEach { line ->
-                        add(buildJsonObject {
-                            put("product_id", line.productId)
-                            put("quantity", line.quantity)
-                        })
-                    }
-                })
-                put("p_payments", buildJsonArray {
-                    payload.payments.forEach { payment ->
-                        add(buildJsonObject {
-                            put("method", payment.method)
-                            put("amount", payment.amount)
-                            payment.tendered?.let { put("tendered", it) }
-                            payment.referenceNumber?.trim()?.takeIf { it.isNotBlank() }?.let {
-                                put("reference_number", it)
-                            }
-                        })
-                    }
+                    put("payments",buildJsonArray {
+                        payload.payments.forEach { payment ->
+                            add(buildJsonObject {
+                                put("method",payment.method)
+                                put("amount",payment.amount)
+                                payment.tendered?.let { put("tendered",it) }
+                                payment.referenceNumber?.trim()?.takeIf { it.isNotBlank() }?.let {
+                                    put("reference_number",it)
+                                }
+                            })
+                        }
+                    })
                 })
             }
         ).decodeSingle()
