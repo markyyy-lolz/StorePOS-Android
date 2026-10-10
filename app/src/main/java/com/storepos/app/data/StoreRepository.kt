@@ -1097,8 +1097,8 @@ object StoreRepository {
         require(op.kind in setOf("create","edit","adjust","count"))
         val data = buildJsonObject {
             put("product_id",op.productId)
-            op.before?.let { put("before",inventorySnapshotJson.encodeToJsonElement(it)) }
-            op.after?.let { put("after",inventorySnapshotJson.encodeToJsonElement(it)) }
+            op.before?.let { put("before",inventorySnapshotJson.encodeToJsonElement(Product.serializer(),it)) }
+            op.after?.let { put("after",inventorySnapshotJson.encodeToJsonElement(Product.serializer(),it)) }
             op.delta?.let { put("delta",it) }
             op.expectedStock?.let { put("expected_stock",it) }
             op.countedStock?.let { put("counted_stock",it) }
