@@ -174,7 +174,8 @@ public sealed class SupabaseCloud
         }
     }
 }
-public sealed class CloudException(int code,string message):Exception(message) {
-    public int StatusCode {get;}=code;
-    public bool Transient=>code==408||code==429||code>=500;
+public sealed class CloudException : Exception {
+    public int StatusCode {get;}
+    public CloudException(int code,string message):base(message) { StatusCode=code; }
+    public bool Transient=>StatusCode==408||StatusCode==429||StatusCode>=500;
 }
