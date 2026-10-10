@@ -241,7 +241,7 @@ public sealed class LocalStore
     }
     public List<QueueItem> GetOutbox(Guid shopId) {
         using var db=Connect(); using var cmd=db.CreateCommand();
-        cmd.CommandText="SELECT id,shop_id,actor_id,epoch,kind,payload,receipt,status,error,created_utc FROM outbox WHERE shop_id=$shop ORDER BY created_utc,id";
+        cmd.CommandText="SELECT id,shop_id,actor_id,epoch,kind,payload,receipt,status,error,created_utc FROM outbox WHERE shop_id=$shop ORDER BY rowid ASC";
         cmd.Parameters.AddWithValue("$shop",shopId.ToString());
         using var reader=cmd.ExecuteReader();
         var items=new List<QueueItem>();
