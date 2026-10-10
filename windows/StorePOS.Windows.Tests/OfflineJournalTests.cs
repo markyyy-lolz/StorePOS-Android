@@ -72,4 +72,23 @@ public sealed class OfflineJournalTests
             ctx.ShopId,Guid.NewGuid(),new[]{p with {Stock=999}},0));
         Assert.Equal(19m,db.Find(ctx.ShopId,p.Id).Stock);
     }
+    [Fact]
+    public void OfflineProductCreationReplaysBeforeSaleOfNewProduct()
+    {
+        var (db,original,p)=Setup();
+        var ctx=original with {Role="manager"};
+        var created=db.QueueCreate(ctx,"NEW-1","New Product",35m,4m);
+        var newProduct=db.GetProducts(ctx.ShopId).Single(x=>x.Sku=="NEW-1");
+        var cash=db.QueueCashSale(ctx,new[]{
+            new CartLine(newProduct.Id,newProduct.Sku,newProduct.Name,newProduct.Price,1)
+        },50m);
+        var events=db.GetOutbox(ctx.ShopId);
+        Assert.Equal(2,events.Count);
+        Assert.Equal(created.Id,events[0].Id);
+        Assert.Equal("create",events[0].Kind);
+        Assert.Equal(cash.Id,events[1].Id);
+        Assert.Equal("sale",events[1].Kind);
+        Assert.Equal(3m,db.Find(ctx.ShopId,newProduct.Id).Stock);
+    }
+
 }
