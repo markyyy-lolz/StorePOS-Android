@@ -42,6 +42,7 @@ import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.local.OfflineSyncPolicy
 import com.storepos.app.data.local.OfflineSaleSynchronizer
+import com.storepos.app.data.local.OfflineInventorySynchronizer
 import com.storepos.app.data.local.OfflineSyncWorker
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
@@ -293,6 +294,20 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     suspend fun refresh() {
         try {
+            // Do not overwrite the local optimistic product cache while
+            // another offline inventory operation is waiting or rejected.
+            // This matters if the POS and Inventory screens share this tablet.
+            if (offlineStore.pendingInventory(context.shop.id).isNotEmpty()) {
+                runCatching {
+                    OfflineInventorySynchronizer.syncShop(context.shop.id,offlineStore)
+                }
+            }
+            if (offlineStore.pendingInventory(context.shop.id).isNotEmpty() ||
+                offlineStore.needsReviewInventory(context.shop.id).isNotEmpty()) {
+                throw IllegalStateException(
+                    "Offline inventory needs cloud sync or manager review before replacing the cached catalog."
+                )
+            }
             val epochBefore = StoreRepository.hybridCatalogEpoch(context.shop.id)
             coroutineScope {
                 val p = async { StoreRepository.products(context.shop.id) }
