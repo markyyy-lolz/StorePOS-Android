@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Net.Http;
+using System.Net;
+using Microsoft.Web.WebView2.Core;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -26,6 +28,7 @@ public partial class MainWindow : Window
 
     public MainWindow() {
         InitializeComponent();
+        Loaded+=async (_,_)=>await InitializeCaptchaAsync();
         _vault=new SessionVault(_store.Root);
         _deviceId=_store.GetOrCreateDeviceId();
         DeviceIdText.Text="Device ID: "+_deviceId;
@@ -49,6 +52,52 @@ public partial class MainWindow : Window
         }else Status("Sign in to start. First-use cloud setup requires internet.");
     }
 
+    // Same host and callback URI as StorePOS Android's existing
+    // production Turnstile flow. Never run arbitrary remote JavaScript
+    // under an app-origin or accept navigation to an untrusted HTTP host.
+    const string ChallengeUrl="https://storepos.2023107337.workers.dev/turnstile.html?mode=signin&v=3";
+    async Task InitializeCaptchaAsync() {
+        try {
+            await CaptchaWeb.EnsureCoreWebView2Async();
+            var core=CaptchaWeb.CoreWebView2;
+            core.Settings.AreDevToolsEnabled=false;
+            core.Settings.AreDefaultContextMenusEnabled=false;
+            core.NavigationStarting+=(_,args)=>{
+                if(!Uri.TryCreate(args.Uri,UriKind.Absolute,out var uri)) {
+                    args.Cancel=true;return;
+                }
+                if(uri.Scheme.Equals("storepos",StringComparison.OrdinalIgnoreCase)
+                    && uri.Host.Equals("turnstile",StringComparison.OrdinalIgnoreCase)) {
+                    args.Cancel=true;
+                    var token=uri.Query.TrimStart('?').Split('&')
+                        .Select(pair=>pair.Split('=',2))
+                        .Where(pair=>pair.Length==2 && pair[0]=="token")
+                        .Select(pair=>WebUtility.UrlDecode(pair[1]))
+                        .FirstOrDefault();
+                    if(!string.IsNullOrEmpty(token)&&token.Length<=4096) {
+                        CaptchaInput.Password=token;
+                        CaptchaStateText.Text="✓ Cloudflare challenge passed. Complete sign in promptly.";
+                    }
+                    return;
+                }
+                if(uri.Scheme!="https" ||
+                    !uri.Host.Equals("storepos.2023107337.workers.dev",StringComparison.OrdinalIgnoreCase)) {
+                    args.Cancel=true;
+                    CaptchaStateText.Text="Blocked navigation outside StorePOS's verified security page.";
+                }
+            };
+            CaptchaWeb.Source=new Uri(ChallengeUrl);
+        }catch(Exception e) {
+            CaptchaStateText.Text="Security challenge cannot open. Install/repair Microsoft Edge WebView2 Runtime: "+e.Message;
+        }
+    }
+    void ReloadCaptcha_Click(object sender,RoutedEventArgs e) {
+        CaptchaInput.Clear();
+        if(CaptchaWeb.CoreWebView2!=null) {
+            CaptchaStateText.Text="Loading fresh security challenge...";
+            CaptchaWeb.CoreWebView2.Navigate(ChallengeUrl+"&refresh="+Guid.NewGuid().ToString("N"));
+        }else _=InitializeCaptchaAsync();
+    }
     void Status(string msg) {StatusText.Text=msg;UpdateConnectivity();}
     void UpdateConnectivity() {
         ConnectionText.Text=_online?"● ONLINE":"● OFFLINE / LOCAL";
@@ -154,7 +203,7 @@ public partial class MainWindow : Window
         SignInButton.IsEnabled=false;LoginError.Text="";
         try {
             var session=await _cloud.SignIn(EmailInput.Text.Trim(),PasswordInput.Password,
-                CaptchaInput.Text.Trim());
+                CaptchaInput.Password.Trim());
             var shop=await _cloud.GetStorePosShop();
             _shop=shop;_online=true;
             _license=await _cloud.ValidateLicense(shop.ShopId,_deviceId);
