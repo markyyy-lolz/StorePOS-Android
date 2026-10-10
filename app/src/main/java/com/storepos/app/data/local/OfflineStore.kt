@@ -124,11 +124,48 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
      * before permitting cash sales offline. Older pre-reset cache alone is
      * not an authoritative product catalog.
      */
-    fun markProductCacheTrusted(shopId: String) =
-        putBlob("trusted_products:$shopId", System.currentTimeMillis().toString())
+    /**
+     * The catalog and verified server epoch must be committed atomically. A
+     * restart mid-download or old pre-reset cache cannot become trusted.
+     * Mutating the UI's optimistic quantity cache NEVER changes its epoch.
+     */
+    fun saveTrustedProducts(shopId: String, products: List<Product>, epoch: String) {
+        require(shopId.isNotBlank() && epoch.matches(Regex("^[0-9a-fA-F-]{36}$"))) {
+            "Cloud catalog generation missing: offline checkout is disabled."
+        }
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            val now=System.currentTimeMillis()
+            for ((key,value) in listOf(
+                "products:$shopId" to json.encodeToString(products),
+                "catalog_epoch:$shopId" to epoch
+            )) {
+                db.insertWithOnConflict(
+                    "cache_blob",null,
+                    ContentValues().apply {
+                        put("cache_key",key)
+                        put("payload",value)
+                        put("updated_at",now)
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
 
+    fun cachedCatalogEpoch(shopId: String): String? =
+        getBlob("catalog_epoch:$shopId")?.takeIf {
+            it.matches(Regex("^[0-9a-fA-F-]{36}$"))
+        }
+
+    // The v1.8.0 marker does not count: only a confirmed server epoch may
+    // permit an offline checkout after Sherine Store's product reset.
     fun isProductCacheTrusted(shopId: String): Boolean =
-        getBlob("trusted_products:$shopId") != null
+        cachedCatalogEpoch(shopId) != null
 
     fun loadProducts(shopId: String): List<Product> =
         getBlob("products:$shopId")?.let {
