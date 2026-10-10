@@ -100,8 +100,8 @@ public partial class MainWindow : Window
     }
     void Status(string msg) {StatusText.Text=msg;UpdateConnectivity();}
     void UpdateConnectivity() {
-        ConnectionText.Text=_online?"● ONLINE":"● OFFLINE / LOCAL";
-        ConnectionText.Foreground=(Brush)new BrushConverter().ConvertFrom(_online?"#61E1A1":"#F9C875")!;
+        ConnectionText.Text=_online?"● ONLINE":"● OFFLINE • LOCAL";
+        ConnectionText.Foreground=(Brush)new BrushConverter().ConvertFrom(_online?"#137958":"#AC6823")!;
         if(_shop!=null) {
             ShopName.Text=_shop.ShopName;
             OperatorText.Text=_shop.Role.ToUpperInvariant()+" • "+_shop.UserId.ToString("N")[..8];
@@ -149,25 +149,85 @@ public partial class MainWindow : Window
         Pages.SelectedIndex=_license?.Valid==true?0:3;
         RefreshLocal();
         UpdateConnectivity();
+        // Barcode scanner input is immediately ready after a licensed sign-in.
+        if(_license?.Valid==true)SearchInput.Focus();
     }
     void RefreshLocal() {
         if(_shop==null)return;
         var data=_store.GetProducts(_shop.ShopId);
         var query=SearchInput.Text.Trim();
-        ProductsGrid.ItemsSource=data.Where(p=>p.IsActive &&
+        var filtered=data.Where(p=>p.IsActive &&
             (query.Length==0 || p.Name.Contains(query,StringComparison.OrdinalIgnoreCase) ||
              p.Sku.Contains(query,StringComparison.OrdinalIgnoreCase) ||
              p.Barcode?.Contains(query,StringComparison.OrdinalIgnoreCase)==true)).ToList();
+        ProductsGrid.ItemsSource=filtered;
+        ProductsEmptyState.Visibility=filtered.Count==0?Visibility.Visible:Visibility.Collapsed;
+        ProductsCountText.Text=$"{filtered.Count} shown • {data.Count} cached products";
         InventoryGrid.ItemsSource=data;
+        InventoryCountText.Text=$"{data.Count} products";
         OutboxGrid.ItemsSource=_store.GetOutbox(_shop.ShopId);
         UpdateTotal();UpdateConnectivity();
     }
     void UpdateTotal() {
-        CartCount.Text=_cart.Count+" product line(s)";
-        var total=_cart.Sum(x=>x.Total);
+        // This calculation drives both the receipt panel and cash change
+        // preview. It never writes a sale until Complete Cash Sale is clicked.
+        if(CartCount==null || TotalText==null || TenderInput==null)return;
+        CartCount.Text=_cart.Count==1?"1 product line":$"{_cart.Count} product lines";
+        var subtotal=_cart.Sum(x=>x.Total);
         var rate=_shop==null?0:_store.TaxRate(_shop.ShopId);
-        var tax=decimal.Round(total*rate/100,2,MidpointRounding.AwayFromZero);
-        TotalText.Text=$"TOTAL  PHP {total+tax:N2}";
+        var tax=decimal.Round(subtotal*rate/100,2,MidpointRounding.AwayFromZero);
+        var total=subtotal+tax;
+        SubtotalText.Text=$"₱{subtotal:N2}";
+        TaxText.Text=$"₱{tax:N2}";
+        TotalText.Text=$"₱{total:N2}";
+        var tendered=decimal.TryParse(TenderInput.Text,NumberStyles.Number,
+            CultureInfo.CurrentCulture,out var localTender) ? localTender :
+            decimal.TryParse(TenderInput.Text,NumberStyles.Number,
+                CultureInfo.InvariantCulture,out var invariantTender) ? invariantTender : 0m;
+        ChangeText.Text=$"₱{Math.Max(0,tendered-total):N2}";
+    }
+
+    void TenderInput_TextChanged(object sender,TextChangedEventArgs e) {
+        if(IsInitialized && TotalText!=null)UpdateTotal();
+    }
+
+    void Pages_SelectionChanged(object sender,SelectionChangedEventArgs e) {
+        if(Pages==null || e.OriginalSource!=Pages || PosNavButton==null)return;
+        var inactive=(Style)FindResource("NavButton");
+        var active=(Style)FindResource("NavSelectedButton");
+        PosNavButton.Style=Pages.SelectedIndex==0?active:inactive;
+        InventoryNavButton.Style=Pages.SelectedIndex==1?active:inactive;
+        HistoryNavButton.Style=Pages.SelectedIndex==2?active:inactive;
+        SettingsNavButton.Style=Pages.SelectedIndex==3?active:inactive;
+    }
+
+    void MainWindow_PreviewKeyDown(object sender,KeyEventArgs e) {
+        if(LoginOverlay?.Visibility!=Visibility.Collapsed)return;
+        switch(e.Key) {
+            case Key.F2:
+                Pages.SelectedIndex=0;
+                SearchInput.Focus();
+                SearchInput.SelectAll();
+                e.Handled=true;
+                break;
+            case Key.F4:
+                Pages.SelectedIndex=0;
+                Checkout_Click(this,new RoutedEventArgs());
+                e.Handled=true;
+                break;
+            case Key.F5:
+                _=SyncBestEffort();
+                e.Handled=true;
+                break;
+            case Key.F6:
+                Pages.SelectedIndex=1;
+                e.Handled=true;
+                break;
+            case Key.F8:
+                Pages.SelectedIndex=2;
+                e.Handled=true;
+                break;
+        }
     }
     async Task<bool> CheckOnline() {
         if(_shop==null)return false;

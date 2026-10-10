@@ -2,12 +2,12 @@ name: StorePOS Windows CI and Installer
 on:
   workflow_dispatch:
   push:
-    branches: [feature/storepos-windows-v1]
+    branches: [feature/storepos-windows-v1, feature/storepos-windows-v101-aronium-ui]
     paths: ["windows/**", ".github/workflows/windows-build.yml"]
   pull_request:
     paths: ["windows/**", ".github/workflows/windows-build.yml"]
 concurrency:
-  group: storepos-windows-v1-ci
+  group: storepos-windows-v101-ci
   cancel-in-progress: true
 
 permissions:
@@ -46,16 +46,16 @@ jobs:
           if (!(Test-Path $iscc)) { throw "Inno Setup not installed" }
           & $iscc 'windows/installer/StorePOS.iss'
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-          if (!(Test-Path windows/artifacts/StorePOS-Windows-v1.0.0-Setup.exe)) { throw 'Installer missing' }
+          if (!(Test-Path windows/artifacts/StorePOS-Windows-v1.0.1-Setup.exe)) { throw 'Installer missing' }
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: StorePOS-Windows-v1.0.0-Installer
-          path: windows/artifacts/StorePOS-Windows-v1.0.0-Setup.exe
+          name: StorePOS-Windows-v1.0.1-Installer
+          path: windows/artifacts/StorePOS-Windows-v1.0.1-Setup.exe
           if-no-files-found: error
       - name: Upload portable output
         uses: actions/upload-artifact@v4
         with:
-          name: StorePOS-Windows-v1.0.0-Portable
+          name: StorePOS-Windows-v1.0.1-Portable
           path: windows/publish/
           if-no-files-found: error
