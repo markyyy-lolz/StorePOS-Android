@@ -267,7 +267,7 @@ fun OperationsPage(context: ShopContext) {
                         }
                         Button(
                             onClick = {
-                                val pending = offlineStore.pendingSales().size
+                                val pending = (offlineStore.pendingSales(context.shop.id).size + offlineStore.needsReview(context.shop.id).size)
                                 if (pending > 0) {
                                     error = "Sync " + pending + " offline sale(s) before closing this shift."
                                 } else {
@@ -595,7 +595,7 @@ fun OperationsPage(context: ShopContext) {
             onClose = { actual, notes ->
                 scope.launch {
                     error = null
-                    if (offlineStore.pendingSales().isNotEmpty()) {
+                    if ((offlineStore.pendingSales(context.shop.id).isNotEmpty() || offlineStore.needsReview(context.shop.id).isNotEmpty())) {
                         error = "Pending offline sales must sync before shift close."
                         return@launch
                     }
