@@ -291,6 +291,7 @@ public partial class MainWindow : Window
             if(p.TrackStock && qty>p.Stock)
                 throw new InvalidOperationException("Insufficient local quantity.");
             _cart.Add(new CartLine(p.Id,p.Sku,p.Name,p.Price,qty));
+            SearchInput.Clear();SearchInput.Focus();
         }catch(Exception ex){ShowError(ex);}
     }
     void RemoveCart_Click(object sender,RoutedEventArgs e) {
@@ -301,7 +302,7 @@ public partial class MainWindow : Window
             RequireTrading();
             CheckoutButton.IsEnabled=false;
             var tendered=DecimalValue(TenderInput.Text,"cash tendered");
-            var receipt=_store.QueueCashSale(_shop!,_cart.ToList(),tendered);
+            var receipt=_store.QueueCashSale(_shop!,_cart.ToList(),tendered,WidthMm);
             _cart.Clear();
             ReceiptText.Text=receipt.Receipt;
             RefreshLocal();
