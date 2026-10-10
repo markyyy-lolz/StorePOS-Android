@@ -1,3 +1,4 @@
+using System.IO;
 using StorePOS.Windows.Core;
 using StorePOS.Windows.Services;
 using Xunit;
