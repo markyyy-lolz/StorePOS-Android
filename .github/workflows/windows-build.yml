@@ -1,0 +1,57 @@
+name: StorePOS Windows CI and Installer
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/storepos-windows-v1]
+    paths: ["windows/**", ".github/workflows/windows-build.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows-build.yml"]
+permissions:
+  contents: read
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build Windows desktop
+        shell: pwsh
+        run: dotnet build windows/StorePOS.Windows/StorePOS.Windows.csproj -c Release -warnaserror
+      - name: Run offline safety tests
+        shell: pwsh
+        run: dotnet test windows/StorePOS.Windows.Tests/StorePOS.Windows.Tests.csproj -c Release --verbosity normal
+      - name: Publish self-contained Windows x64
+        shell: pwsh
+        run: |
+          dotnet publish windows/StorePOS.Windows/StorePOS.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o windows/publish
+      - name: Verify Windows EXE
+        shell: pwsh
+        run: |
+          if (!(Test-Path windows/publish/StorePOS.Windows.exe)) { throw "Missing executable" }
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - name: Build EXE installer
+        shell: pwsh
+        run: |
+          $iscc="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { throw "Inno Setup not installed" }
+          & $iscc 'windows/installer/StorePOS.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+          if (!(Test-Path windows/artifacts/StorePOS-Windows-v1.0.0-Setup.exe)) { throw 'Installer missing' }
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: StorePOS-Windows-v1.0.0-Installer
+          path: windows/artifacts/StorePOS-Windows-v1.0.0-Setup.exe
+          if-no-files-found: error
+      - name: Upload portable output
+        uses: actions/upload-artifact@v4
+        with:
+          name: StorePOS-Windows-v1.0.0-Portable
+          path: windows/publish/
+          if-no-files-found: error
