@@ -108,7 +108,7 @@ fun StorePosApp() {
         // authenticated user may start while the internet is disconnected.
         if (!HybridConnectivity.hasInternet(androidContext)) {
             val snapshot = OfflineBootCache.restore(androidContext, userId, deviceId)
-                ?: error("Offline login unavailable. Sign in and validate this device online first, then enable Stay signed in.")
+                ?: throw IllegalStateException("Offline login unavailable. Sign in and validate this device online first, then enable Stay signed in.")
             state = BootState.Ready(snapshot.first, snapshot.second, snapshot.third)
             notice = "OFFLINE MODE • Using last verified license and locally cached catalog."
             return
