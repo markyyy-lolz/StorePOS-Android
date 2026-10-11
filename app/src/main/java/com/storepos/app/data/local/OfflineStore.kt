@@ -207,6 +207,29 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
                         }
                     }
                 }
+                // Debit store credit under the SAME transaction lock as stock.
+                // Cashier cannot exceed the host's most recently cached balance.
+                val spentCredit = payload.payments.filter { it.method == "store_credit" }
+                    .sumOf { it.amount }
+                if (spentCredit > 0) {
+                    val customerId = payload.customerId
+                        ?: error("Offline store credit requires a selected customer.")
+                    val customers = loadCustomers(payload.shopId)
+                    val account = customers.firstOrNull { it.id == customerId && it.isActive }
+                        ?: error("Customer credit record not cached on LAN host.")
+                    require(account.storeCreditBalance + 0.000001 >= spentCredit) {
+                        "Insufficient shared store-credit balance for " + account.name + "."
+                    }
+                    saveCustomers(payload.shopId, customers.map { customer ->
+                        if (customer.id == customerId) customer.copy(
+                            storeCreditBalance = (customer.storeCreditBalance - spentCredit).coerceAtLeast(0.0)
+                        ) else customer
+                    })
+                }
+                require(payload.payments.none { it.method in setOf("credit", "paymongo") }) {
+                    "PayMongo or new customer debt cannot be finalized offline."
+                }
+
                 val updated = catalog.map { product ->
                     val deduction = grouped[product.id] ?: 0.0
                     if (product.trackStock && deduction > 0) {
@@ -268,6 +291,26 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             enqueueSale(payload)
             saveProducts(payload.shopId, updated)
             database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun lanCreditBalances(shopId: String): Map<String, Double> =
+        loadCustomers(shopId).associate { it.id to it.storeCreditBalance }
+
+    fun applyLanCreditBalances(shopId: String, balances: Map<String, Double>): List<Customer> {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val changed = loadCustomers(shopId).map { customer ->
+                balances[customer.id]?.let { updated ->
+                    customer.copy(storeCreditBalance = updated)
+                } ?: customer
+            }
+            saveCustomers(shopId, changed)
+            database.setTransactionSuccessful()
+            return changed
         } finally {
             database.endTransaction()
         }
