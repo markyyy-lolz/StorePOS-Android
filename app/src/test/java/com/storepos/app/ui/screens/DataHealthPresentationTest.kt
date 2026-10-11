@@ -23,7 +23,7 @@ class DataHealthPresentationTest {
         val cost = groups.single { it.key == "missing_cost" }
         assertEquals(3, cost.results?.size)
         assertEquals("StorePOS Basic Monthly", healthRecordTitle(cost.results!![0]))
-        assertEquals("SKU 1001  •  Selling price: 1.0", healthRecordDescription(cost.results[0]))
+        assertEquals("SKU 1001  •  Selling price: 1.00", healthRecordDescription(cost.results[0]))
         assertEquals(0, groups.single { it.key == "negative_stock" }.results?.size)
     }
 
