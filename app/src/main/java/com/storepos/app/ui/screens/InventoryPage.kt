@@ -36,6 +36,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.OfflineInventoryActions
+import com.storepos.app.data.local.OfflineInventorySynchronizer
+import com.storepos.app.data.local.OfflineSyncWorker
 import com.storepos.app.data.model.Product
 import com.storepos.app.data.model.ProductInsert
 import com.storepos.app.data.model.ProductCategory
@@ -46,11 +50,21 @@ import com.storepos.app.data.model.InventoryCountItem
 import com.storepos.app.printing.ProductLabelPrinter
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
 @Composable
 fun InventoryPage(context: ShopContext) {
+    val androidContext=LocalContext.current
+    val offlineStore=remember { OfflineStore(androidContext) }
+    var offlineMode by remember(context.shop.id) { mutableStateOf(false) }
+    var pendingInventory by remember(context.shop.id) { mutableIntStateOf(0) }
+    var reviewInventory by remember(context.shop.id) { mutableIntStateOf(0) }
+    var offlineStocktakeOpen by remember { mutableStateOf(false) }
+    var showInventoryQueue by remember { mutableStateOf(false) }
+    val inventoryManager=context.member.role.lowercase() in setOf("owner","admin","manager")
+    val inventoryStaff=context.member.role.lowercase() in setOf("owner","admin","manager","inventory")
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
     var categories by remember { mutableStateOf<List<ProductCategory>>(emptyList()) }
     // Preserve the selection after a completed HID scan so the next barcode
@@ -102,9 +116,42 @@ fun InventoryPage(context: ShopContext) {
     }
 
     suspend fun refresh() {
-        products = StoreRepository.products(context.shop.id)
-        categories = StoreRepository.categories(context.shop.id)
-        counts = StoreRepository.inventoryCounts(context.shop.id)
+        val shop=context.shop.id
+        // Don't replace optimistic inventory changes with a remote snapshot
+        // before they have been uploaded or manually reconciled.
+        val pending=offlineStore.pendingInventory(shop)
+        if(pending.isNotEmpty()) {
+            runCatching { OfflineInventorySynchronizer.syncShop(shop,offlineStore) }
+        }
+        pendingInventory=offlineStore.pendingInventory(shop).size
+        reviewInventory=offlineStore.needsReviewInventory(shop).size
+        if(pendingInventory>0 || reviewInventory>0) {
+            offlineMode=true
+            products=offlineStore.loadProducts(shop)
+            categories=offlineStore.loadCategories(shop)
+            if(products.isEmpty()) error="Connect to download inventory before working offline."
+            return
+        }
+        try {
+            val before=StoreRepository.hybridCatalogEpoch(shop)
+            val remoteProducts=StoreRepository.products(shop)
+            val remoteCategories=StoreRepository.categories(shop)
+            val remoteCounts=StoreRepository.inventoryCounts(shop)
+            val after=StoreRepository.hybridCatalogEpoch(shop)
+            check(before==after) { "Catalog changed during refresh. Retry online." }
+            offlineStore.saveTrustedProducts(shop,remoteProducts,after)
+            offlineStore.saveCategories(shop,remoteCategories)
+            products=remoteProducts
+            categories=remoteCategories
+            counts=remoteCounts
+            offlineMode=false
+        }catch(failure:Throwable) {
+            products=offlineStore.loadProducts(shop)
+            categories=offlineStore.loadCategories(shop)
+            counts=emptyList()
+            offlineMode=true
+            if(products.isEmpty()) throw failure
+        }
     }
 
     suspend fun openStocktake() {
@@ -117,8 +164,15 @@ fun InventoryPage(context: ShopContext) {
     }
 
     LaunchedEffect(context.shop.id) {
-        runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
-        loading = false
+        OfflineSyncWorker.schedule(androidContext,context.shop.id)
+        runCatching { refresh() }.onFailure { error=StoreRepository.userMessage(it) }
+        loading=false
+        while(true) {
+            delay(30_000)
+            if(offlineMode || pendingInventory>0) {
+                runCatching { refresh() }.onFailure { error=StoreRepository.userMessage(it) }
+            }
+        }
     }
 
     LaunchedEffect(loading) {
@@ -136,10 +190,13 @@ fun InventoryPage(context: ShopContext) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         PageHeader(
             "Inventory",
-            "${products.size} product(s)",
+            "${products.size} products • " +
+                (if(offlineMode) "OFFLINE INVENTORY" else "Cloud synced") +
+                (if(pendingInventory>0) " • $pendingInventory queued" else "") +
+                (if(reviewInventory>0) " • $reviewInventory NEED REVIEW" else ""),
             action = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { categoryManagerOpen = true }) {
+                    OutlinedButton(onClick = { categoryManagerOpen = true },enabled=!offlineMode) {
                         Icon(Icons.Rounded.Category, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Categories")
@@ -156,20 +213,25 @@ fun InventoryPage(context: ShopContext) {
                         onClick = {
                             scope.launch {
                                 error = null
-                                runCatching { openStocktake() }
+                                runCatching {
+                                    if(offlineMode) offlineStocktakeOpen=true
+                                    else openStocktake()
+                                }
                                     .onFailure {
                                         stocktakeLoading = false
                                         error = StoreRepository.userMessage(it)
                                     }
                             }
                         },
-                        enabled = products.any { it.isActive && it.trackStock } && !stocktakeLoading
+                        enabled = products.any { it.isActive && it.trackStock } && !stocktakeLoading &&
+                            (!offlineMode || inventoryManager)
                     ) {
                         Icon(Icons.Rounded.FactCheck, null)
                         Spacer(Modifier.width(6.dp))
                         Text(if (stocktakeLoading) "Loading…" else "Stocktake")
                     }
-                    Button(onClick = { addOpen = true }) {
+                    Button(onClick = { addOpen = true },
+                        enabled=!offlineMode || inventoryManager) {
                         Icon(Icons.Rounded.Add, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Add product")
@@ -178,6 +240,21 @@ fun InventoryPage(context: ShopContext) {
             }
         )
 
+        if(offlineMode) Text(
+            "Offline changes are saved to this tablet, not yet to Supabase. " +
+                "Cash sales and inventory may conflict with another tablet; conflicts require manager review.",
+            color=MaterialTheme.colorScheme.primary
+        )
+        if(pendingInventory>0 || reviewInventory>0) {
+            OutlinedButton(onClick={showInventoryQueue=true}) {
+                Text("View inventory sync ($pendingInventory queued, $reviewInventory needs review)")
+            }
+        }
+        if(reviewInventory>0) Text(
+            "$reviewInventory inventory change(s) require manager review. " +
+                "Keep this tablet's SQLite data; do not uninstall or clear app storage.",
+            color=MaterialTheme.colorScheme.error
+        )
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
         Row(
@@ -261,10 +338,12 @@ fun InventoryPage(context: ShopContext) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Row {
-                                    IconButton(onClick = { editProduct = product }) {
+                                    IconButton(onClick = { editProduct = product },
+                                        enabled=!offlineMode || inventoryManager) {
                                         Icon(Icons.Rounded.Edit, contentDescription = "Edit product")
                                     }
-                                    IconButton(onClick = { stockProduct = product }) {
+                                    IconButton(onClick = { stockProduct = product },
+                                        enabled=!offlineMode || inventoryStaff) {
                                         Icon(Icons.Rounded.SyncAlt, contentDescription = "Adjust stock")
                                     }
                                 }
@@ -276,6 +355,14 @@ fun InventoryPage(context: ShopContext) {
         }
     }
 
+    if(showInventoryQueue) {
+        OfflineInventoryQueueDialog(
+            waiting=offlineStore.pendingInventory(context.shop.id),
+            review=offlineStore.needsReviewInventory(context.shop.id),
+            onDismiss={showInventoryQueue=false}
+        )
+    }
+
     if (addOpen) {
         AddProductDialog(
             context = context,
@@ -284,11 +371,15 @@ fun InventoryPage(context: ShopContext) {
             onSave = { input ->
                 scope.launch {
                     error = null
-                    runCatching { StoreRepository.addProduct(input) }
-                        .onSuccess {
-                            addOpen = false
-                            refresh()
-                        }
+                    runCatching {
+                        // Queue FIRST even when online, so a lost RPC acknowledgement
+                        // cannot create a duplicate product or double opening stock.
+                        products=OfflineInventoryActions.add(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,input)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                        if(!offlineMode) runCatching { refresh() }
+                    }.onSuccess { addOpen=false }
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
             }
@@ -303,11 +394,13 @@ fun InventoryPage(context: ShopContext) {
             onSave = { updated ->
                 scope.launch {
                     error = null
-                    runCatching { StoreRepository.updateProduct(updated) }
-                        .onSuccess {
-                            editProduct = null
-                            refresh()
-                        }
+                    runCatching {
+                        products=OfflineInventoryActions.edit(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,updated)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                        if(!offlineMode) runCatching { refresh() }
+                    }.onSuccess { editProduct=null }
                         .onFailure { error = StoreRepository.userMessage(it) }
                 }
             }
@@ -353,12 +446,34 @@ fun InventoryPage(context: ShopContext) {
             onSave = { delta, reason, notes ->
                 scope.launch {
                     error = null
-                    runCatching { StoreRepository.adjustInventoryStock(product.id, delta, reason, notes) }
-                        .onSuccess {
-                            stockProduct = null
-                            refresh()
-                        }
+                    runCatching {
+                        products=OfflineInventoryActions.adjust(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,product.id,delta,reason,notes)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                        if(!offlineMode) runCatching { refresh() }
+                    }.onSuccess { stockProduct=null }
                         .onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
+    if(offlineStocktakeOpen) {
+        OfflinePhysicalCountDialog(
+            products=products.filter { it.isActive && it.trackStock &&
+                !it.serialTracked && !it.batchTracked && !it.isWeighed && it.retailParentId==null },
+            onDismiss={offlineStocktakeOpen=false},
+            onSave={values->
+                scope.launch {
+                    error=null
+                    runCatching {
+                        products=OfflineInventoryActions.count(offlineStore,context.shop.id,
+                            context.userId,context.member.role,products,values)
+                        OfflineSyncWorker.requestOnReconnect(androidContext,context.shop.id)
+                        pendingInventory=offlineStore.pendingInventory(context.shop.id).size
+                    }.onSuccess { offlineStocktakeOpen=false }
+                        .onFailure { error=StoreRepository.userMessage(it) }
                 }
             }
         )
@@ -1128,5 +1243,131 @@ private fun StocktakeDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+
+/**
+ * Partial offline stocktake. Blank SKUs are NOT interpreted as zero.
+ * Each submitted product carries its local expected quantity; changed cloud
+ * stock (including sales from the second tablet) requires manager review.
+ */
+@Composable
+private fun OfflinePhysicalCountDialog(
+    products:List<Product>,
+    onDismiss:()->Unit,
+    onSave:(Map<String,Double>)->Unit
+) {
+    var values by remember { mutableStateOf<Map<String,String>>(emptyMap()) }
+    var scanNotice by remember { mutableStateOf<String?>(null) }
+    val scan=rememberLauncherForActivityResult(ScanContract()) { response->
+        val barcode=response.contents?.trim().orEmpty()
+        val matched=products.firstOrNull {
+            it.sku.equals(barcode,true) || it.barcode.equals(barcode,true)
+        }
+        if(matched==null)scanNotice="Barcode not found in offline stocktake: $barcode"
+        else {
+            val old=values[matched.id]?.toDoubleOrNull() ?: 0.0
+            values=values+(matched.id to (old+1.0).toString())
+            scanNotice="Counted +1: ${matched.name}"
+        }
+    }
+    val parsed=values.mapNotNull { (id,value) ->
+        value.toDoubleOrNull()?.takeIf { it.isFinite() && it>=0 }?.let { id to it }
+    }.toMap()
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        title={Text("Offline physical stocktake")},
+        text={
+            Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("Scan or enter quantities for counted products ONLY. Uncounted items stay unchanged. " +
+                    "Cloud stock that changed on another device will require manager review.",
+                    style=MaterialTheme.typography.bodySmall)
+                Button(onClick={
+                    scan.launch(ScanOptions().setPrompt("Scan physical stock").setBeepEnabled(true))
+                },modifier=Modifier.fillMaxWidth()) { Text("Scan counted item +1") }
+                scanNotice?.let { Text(it,style=MaterialTheme.typography.bodySmall) }
+                LazyColumn(
+                    modifier=Modifier.heightIn(max=370.dp),
+                    verticalArrangement=Arrangement.spacedBy(5.dp)
+                ) {
+                    items(products,key={it.id}) { item->
+                        Row(verticalAlignment=Alignment.CenterVertically,
+                            horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.name,fontWeight=FontWeight.Bold)
+                                Text("Local expected: ${item.stockQuantity} • ${item.sku}",
+                                    style=MaterialTheme.typography.bodySmall)
+                            }
+                            OutlinedTextField(
+                                value=values[item.id].orEmpty(),
+                                onValueChange={ v-> values=values+(item.id to v) },
+                                label={Text("Counted")},
+                                placeholder={Text("—")},
+                                keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),
+                                singleLine=true,modifier=Modifier.width(120.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton={
+            Button(onClick={onSave(parsed)},
+                enabled=parsed.isNotEmpty() &&
+                    values.all { (id,v)->v.isBlank() ||
+                        (products.any { it.id==id } && v.toDoubleOrNull()?.let {
+                            it.isFinite() && it>=0.0
+                        }==true) }
+            ) { Text("Save offline stocktake") }
+        },
+        dismissButton={TextButton(onClick=onDismiss){Text("Cancel")}}
+    )
+}
+
+
+@Composable
+private fun OfflineInventoryQueueDialog(
+    waiting:List<com.storepos.app.data.model.PendingOfflineInventoryOperation>,
+    review:List<com.storepos.app.data.model.PendingOfflineInventoryOperation>,
+    onDismiss:()->Unit
+) {
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        title={Text("Offline inventory sync status")},
+        text={
+            Column(verticalArrangement=Arrangement.spacedBy(9.dp)) {
+                Text("Queued changes sync with StorePOS Cloud when the original staff account is online. " +
+                    "Conflicts are never overwritten automatically.",
+                    style=MaterialTheme.typography.bodySmall)
+                LazyColumn(
+                    modifier=Modifier.heightIn(max=420.dp),
+                    verticalArrangement=Arrangement.spacedBy(8.dp)
+                ) {
+                    items(waiting+review,key={it.operation.id}) { item->
+                        val blocked=review.any { it.operation.id==item.operation.id }
+                        Surface(shape=RoundedCornerShape(12.dp),tonalElevation=2.dp) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Text(item.operation.kind.uppercase()+
+                                    " • "+item.operation.productId.take(8),
+                                    fontWeight=FontWeight.Bold)
+                                Text(if(blocked) "NEEDS MANAGER REVIEW" else "Pending Cloud Sync",
+                                    color=if(blocked) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.primary)
+                                item.lastError?.let {
+                                    Text(it,style=MaterialTheme.typography.bodySmall)
+                                }
+                                Text("Operation: "+item.operation.id.take(8),
+                                    style=MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+                Text("Do not uninstall StorePOS or clear its app data while offline inventory is pending. " +
+                    "If a conflict occurs, manually reconcile the actual stock with an authorized manager.",
+                    style=MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton={Button(onClick=onDismiss){Text("Close")}}
     )
 }

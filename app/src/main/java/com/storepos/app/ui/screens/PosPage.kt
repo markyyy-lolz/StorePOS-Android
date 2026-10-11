@@ -40,10 +40,20 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.LanStockHub
+import com.storepos.app.data.local.HybridConnectivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.storepos.app.data.local.OfflineSyncPolicy
+import com.storepos.app.data.local.OfflineSaleSynchronizer
+import com.storepos.app.data.local.OfflineInventorySynchronizer
+import com.storepos.app.data.local.OfflineSyncWorker
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import com.storepos.app.printing.ReceiptCutSettings
+import com.storepos.app.printing.OfflineReceiptFormatter
+import com.storepos.app.printing.LocalReceiptPrinter
 import com.storepos.app.printing.BluetoothReceiptPrinter
 import com.storepos.app.printing.PrinterDevice
 import com.storepos.app.printing.PdfReceiptLine
@@ -58,6 +68,13 @@ import java.time.Instant
 import java.util.UUID
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+
+private data class OfflineQueuedReceipt(
+    val clientKey: String,
+    val receiptNumber: String,
+    val provisionalTotal: Double,
+    val paperWidth: Int
+)
 
 private data class PendingPayMongoSale(
     val sessionId: String,
@@ -132,9 +149,14 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     var offlineMode by remember { mutableStateOf(false) }
     var customerDisplayEnabled by remember { mutableStateOf(false) }
-    var offlineQueued by remember { mutableStateOf<Double?>(null) }
+    var offlineQueued by remember { mutableStateOf<OfflineQueuedReceipt?>(null) }
+    var offlinePrintMessage by remember { mutableStateOf<String?>(null) }
     var pendingCount by remember { mutableStateOf(0) }
+    var needsReviewCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
+    var lanConnected by remember { mutableStateOf(false) }
+    var pendingRetryKey by remember { mutableStateOf<String?>(null) }
+    var pendingRetrySignature by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
@@ -152,7 +174,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         pendingReceiptPdf = null
         if (uri != null && pending != null) {
             runCatching { ReceiptPdfExporter.save(androidContext, uri, pending.second) }
-                .onSuccess { printMessage = "Receipt PDF saved. You can reopen and print it from Files anytime." }
+                .onSuccess {
+                    if (offlineQueued != null) {
+                        offlinePrintMessage = "Provisional receipt PDF saved locally."
+                    } else {
+                        printMessage = "Receipt PDF saved. You can reopen and print it from Files anytime."
+                    }
+                }
                 .onFailure { error = "Unable to save receipt PDF: " + (it.localizedMessage ?: "Storage error") }
         }
     }
@@ -273,6 +301,21 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     suspend fun refresh() {
         try {
+            // Do not overwrite the local optimistic product cache while
+            // another offline inventory operation is waiting or rejected.
+            // This matters if the POS and Inventory screens share this tablet.
+            if (offlineStore.pendingInventory(context.shop.id).isNotEmpty()) {
+                runCatching {
+                    OfflineInventorySynchronizer.syncShop(context.shop.id,offlineStore)
+                }
+            }
+            if (offlineStore.pendingInventory(context.shop.id).isNotEmpty() ||
+                offlineStore.needsReviewInventory(context.shop.id).isNotEmpty()) {
+                throw IllegalStateException(
+                    "Offline inventory needs cloud sync or manager review before replacing the cached catalog."
+                )
+            }
+            val epochBefore = StoreRepository.hybridCatalogEpoch(context.shop.id)
             coroutineScope {
                 val p = async { StoreRepository.products(context.shop.id) }
                 val c = async { StoreRepository.customers(context.shop.id) }
@@ -293,7 +336,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 retailPromos = rp.await()
                 retailFavorites = rf.await()
             }
-            offlineStore.saveProducts(context.shop.id, products)
+            // Take an epoch snapshot on BOTH sides of the catalog download.
+            // Never trust a half-refreshed cache if products reset during fetch.
+            val epochAfter = StoreRepository.hybridCatalogEpoch(context.shop.id)
+            check(epochBefore == epochAfter) {
+                "Catalog changed during cloud refresh. Retry while online."
+            }
+            offlineStore.saveTrustedProducts(context.shop.id, products, epochAfter)
             offlineStore.saveCustomers(context.shop.id, customers)
             offlineStore.saveMotorcycles(context.shop.id, motorcycles)
 
@@ -317,7 +366,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         ) {
             runCatching { PayMongoRepository.integration(context.shop.id) }.getOrNull()
         } else null
-        pendingCount = offlineStore.pendingSales().size
+        pendingCount = offlineStore.pendingSales(context.shop.id).size
+        needsReviewCount = offlineStore.needsReview(context.shop.id).size
     }
 
     fun requiresRetailOnline(lines: List<CartLine> = cart): Boolean =
@@ -356,6 +406,10 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 error = "Packs, promos, weighed items, batches and serialized stock require StorePOS Cloud checkout. Reconnect before completing this cart."
                 return
             }
+            if (!offlineStore.isProductCacheTrusted(context.shop.id)) {
+                error = "Connect once to refresh this shop's products after the catalog reset before accepting offline sales."
+                return
+            }
             retailQuote = null
             checkout = true
             return
@@ -383,18 +437,24 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     }
 
     suspend fun syncOfflineSales() {
+        if (syncingOffline) return
         syncingOffline = true
-        val pending = offlineStore.pendingSales()
-        pending.forEach { queued ->
-            runCatching { StoreRepository.completeOfflineSale(queued.payload) }
-                .onSuccess { offlineStore.removePendingSale(queued.id) }
-                .onFailure { offlineStore.setPendingError(queued.id, StoreRepository.userMessage(it)) }
-        }
-        pendingCount = offlineStore.pendingSales().size
-        syncingOffline = false
-        if (pendingCount == 0 && pending.isNotEmpty()) {
-            error = null
-            runCatching { refresh() }
+        try {
+            val summary = OfflineSaleSynchronizer.syncShop(context.shop.id, offlineStore)
+            pendingCount = summary.pending
+            needsReviewCount = summary.needsReview
+            if (summary.synced > 0) {
+                runCatching { refresh() }
+            }
+            when {
+                summary.needsReview > 0 ->
+                    error = "Some offline cash sales need manager review (reset/price/stock). " +
+                        "They remain saved locally and have NOT been posted to the cloud."
+                summary.message != null -> error = summary.message
+                summary.synced > 0 -> error = null
+            }
+        } finally {
+            syncingOffline = false
         }
     }
 
@@ -497,9 +557,50 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     }
 
     LaunchedEffect(context.shop.id) {
+        OfflineSyncWorker.schedule(androidContext, context.shop.id)
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
+    }
+
+    // Both tablets refresh the common HOST stock snapshot over local Wi-Fi.
+    // No internet is required, but the host must be powered on.
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            delay(4_000)
+            if (loading || checkout || preparingCheckout || printing) continue
+            val hub = LanStockHub.load(androidContext, context.shop.id)
+            if (hub.mode == "off") {
+                lanConnected = false
+                continue
+            }
+            val response = withContext(Dispatchers.IO) {
+                runCatching { LanStockHub.stock(androidContext, context.shop.id) }
+            }
+            response.onSuccess { counts ->
+                lanConnected = true
+                if (offlineMode && counts.isNotEmpty()) {
+                    val adjusted = offlineStore.loadProducts(context.shop.id).map { item ->
+                        counts[item.id]?.let { qty -> item.copy(stockQuantity = qty) } ?: item
+                    }
+                    products = adjusted
+                    offlineStore.saveProducts(context.shop.id, adjusted)
+                }
+            }.onFailure { lanConnected = false }
+        }
+    }
+
+    // Automatic retry while the POS register is open. Both tablets keep
+    // distinct local queues and send them through idempotent cloud RPC keys.
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            delay(30_000)
+            if (pendingCount > 0 && !syncingOffline) {
+                runCatching { syncOfflineSales() }
+            } else if (offlineMode && pendingCount == 0) {
+                runCatching { refresh() }
+            }
+        }
     }
 
     LaunchedEffect(pendingPayMongo?.sessionId, paymongoRetryNonce) {
@@ -667,6 +768,16 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             Spacer(Modifier.width(4.dp))
                             Text("Held " + heldSales.size)
                         }
+                    }
+                    if (needsReviewCount > 0) {
+                        AssistChip(
+                            onClick = {
+                                error = "$needsReviewCount offline sale(s) need manager review. " +
+                                    "Original receipt and customer payment details are retained on this tablet; " +
+                                    "they will not auto-sync after a factory reset or stock/price conflict."
+                            },
+                            label = { Text("Needs review: " + needsReviewCount) }
+                        )
                     }
                     if (pendingCount > 0) {
                         Button(
@@ -1181,21 +1292,117 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     offlineQueued?.let { provisional ->
         AlertDialog(
-            onDismissRequest = { offlineQueued = null },
+            onDismissRequest = { offlineQueued = null; offlinePrintMessage = null },
             icon = { Icon(Icons.Rounded.CloudOff, null, modifier = Modifier.size(44.dp)) },
-            title = { Text("Sale saved offline", fontWeight = FontWeight.Black) },
+            title = { Text("Offline cash sale saved", fontWeight = FontWeight.Black) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Stored on this device. It becomes a final StorePOS transaction only after cloud sync succeeds.")
-                    Text("Provisional total: " + money(provisional), fontWeight = FontWeight.Bold)
                     Text(
-                        "Pending sync: " + pendingCount + ". Keep this cashier shift open until all queued sales sync.",
+                        "This cash sale is stored on this tablet, not yet posted to StorePOS Cloud. " +
+                            "The provisional receipt is NOT a final cloud sale receipt."
+                    )
+                    Text(
+                        "Pending reference: " + provisional.receiptNumber,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text("Cash total: " + money(provisional.provisionalTotal), fontWeight = FontWeight.Bold)
+                    Text(
+                        "Pending sync: " + pendingCount +
+                            ". Keep this cashier shift open until all queued sales sync.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
+                        Text(
+                            "Shared cloud printer is unavailable offline. Print locally only if the " +
+                                "VOZY G80 is directly paired by Bluetooth or USB with THIS tablet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    offlinePrintMessage?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (it.contains("not printed", true))
+                                MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             },
-            confirmButton = { Button(onClick = { offlineQueued = null }) { Text("Done") } }
+            confirmButton = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                printing = true
+                                offlinePrintMessage = null
+                                scope.launch {
+                                    try {
+                                        val bytes = offlineStore.receiptBytes(
+                                            context.shop.id, provisional.clientKey
+                                        ) ?: error("The local receipt copy is missing.")
+                                        val result = LocalReceiptPrinter.print(androidContext, bytes)
+                                        offlinePrintMessage = result.fold(
+                                            onSuccess = {
+                                                "Provisional receipt sent to local printer. " +
+                                                    "Check paper before reprinting."
+                                            },
+                                            onFailure = {
+                                                "Receipt not printed. The cash sale is still saved " +
+                                                    "locally. " + (it.message ?: "Check the printer.")
+                                            }
+                                        )
+                                    } catch (failure: Throwable) {
+                                        offlinePrintMessage = "Receipt not printed. Cash sale is " +
+                                            "saved locally: " + (failure.message ?: "Unknown error")
+                                    } finally {
+                                        printing = false
+                                    }
+                                }
+                            },
+                            enabled = !printing && prefs.getString("printer_address", null) != null,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Print, null)
+                            Spacer(Modifier.width(5.dp))
+                            Text(if (printing) "Printing…" else "Print offline")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                runCatching {
+                                    val bytes = offlineStore.receiptBytes(
+                                        context.shop.id, provisional.clientKey
+                                    ) ?: error("The local receipt copy is missing.")
+                                    ReceiptPdfExporter.renderThermalBytes(bytes, provisional.paperWidth)
+                                }.onSuccess {
+                                    pendingReceiptPdf = provisional.receiptNumber to it
+                                    saveReceiptPdf.launch(
+                                        ReceiptPdfExporter.fileName(provisional.receiptNumber)
+                                    )
+                                }.onFailure {
+                                    offlinePrintMessage = "PDF error: " +
+                                        (it.message ?: "Local receipt unavailable.")
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.PictureAsPdf, null)
+                            Spacer(Modifier.width(5.dp))
+                            Text("Save PDF")
+                        }
+                    }
+                    Button(
+                        onClick = { offlineQueued = null; offlinePrintMessage = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Done") }
+                }
+            },
+            shape = RoundedCornerShape(28.dp)
         )
     }
 
@@ -1619,19 +1826,32 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         return@launch
                     }
 
+                    // A cloud/LAN timeout is ambiguous. Retain this sale UUID
+                    // for an unchanged cart so a retry cannot sell the item twice.
+                    val signature = buildString {
+                        soldCart.forEach {
+                            append(it.product.id).append(':').append(it.quantity)
+                                .append(':').append(it.unitPrice).append(';')
+                        }
+                        append('|').append(customerId).append('|').append(discount)
+                            .append('|').append(tax)
+                        payments.forEach {
+                            append('|').append(it.method).append(':').append(it.amount)
+                        }
+                    }
+                    if (pendingRetryKey != null && signature != pendingRetrySignature) {
+                        error = "Previous payment result is uncertain. Verify original sale before editing cart."
+                        return@launch
+                    }
+                    val cashierSaleKey = pendingRetryKey ?: UUID.randomUUID().toString().also {
+                        pendingRetryKey = it
+                        pendingRetrySignature = signature
+                    }
                     runCatching {
                         if (offlineMode) {
-                            StoreRepository.completeSaleV3(
-                                shopId = context.shop.id,
-                                customerId = customerId,
-                                motorcycleId = bikeId,
-                                jobOrderId = null,
-                                cart = soldCart,
-                                discount = discount,
-                                tax = tax,
-                                payments = payments,
-                                managerPin = managerPin
-                            ) to null
+                            // Avoid network calls while explicitly offline; cash sale and
+                            // thermal receipt are persisted atomically below instead.
+                            throw IllegalStateException("Offline mode: queue cash sale locally.")
                         } else {
                             RetailRepository.checkout(
                                 shopId = context.shop.id,
@@ -1641,7 +1861,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 payments = payments,
                                 managerPin = managerPin,
                                 charges = charges,
-                                dueDate = dueDate
+                                dueDate = dueDate,
+                                clientKey = cashierSaleKey
                             ).let { it.sale to it.receiptToken }
                         }
                     }.onSuccess { result ->
@@ -1651,10 +1872,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastPayments = payments
                         lastSale = sale
                         lastSaleTraining = false
+                        pendingRetryKey = null
+                        pendingRetrySignature = null
                         receiptPrintedOnce = false
                         cart = emptyList()
                         checkout = false
-                        refresh()
+                        runCatching { refresh() }
 
                         if (settings.autoPrintReceipt && (prefs.getString("printer_address", null) != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct")) {
                             printing = true
@@ -1676,8 +1899,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 error = "Manager-approved transactions cannot be queued offline. Reconnect and retry."
                                 return@onFailure
                             }
-                            if (payments.any { it.method in listOf("store_credit","credit") }) {
-                                error = "Store credit and customer credit require an online connection."
+                            if (payments.any { it.method != "cash" }) {
+                                error = "Only cash sales can be queued offline. Verify online payment " +
+                                    "status before retrying. Never charge the customer twice."
+                                return@onFailure
+                            }
+                            if (!offlineStore.isProductCacheTrusted(context.shop.id)) {
+                                error = "Reconnect and refresh the shop catalog after the reset before offline sales."
                                 return@onFailure
                             }
 
@@ -1688,36 +1916,119 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
                             val provisionalTotal = soldCart.sumOf { it.lineTotal } - discount + tax
                             val first = payments.first()
-                            offlineStore.enqueueSale(
-                                OfflineSalePayload(
-                                    clientKey = UUID.randomUUID().toString(),
-                                    shopId = context.shop.id,
-                                    customerId = customerId,
-                                    motorcycleId = bikeId,
-                                    discountAmount = discount,
-                                    taxAmount = tax,
-                                    amountTendered = first.tendered,
-                                    paymentMethod = first.method,
-                                    referenceNumber = first.referenceNumber,
-                                    items = soldCart.map {
-                                        SaleRpcItem(it.product.id, it.quantity, it.unitPriceOverride)
-                                    },
-                                    payments = payments
-                                )
+                            val offlinePayload = OfflineSalePayload(
+                                clientKey = cashierSaleKey,
+                                shopId = context.shop.id,
+                                cashierId = context.userId,
+                                customerId = customerId,
+                                motorcycleId = bikeId,
+                                discountAmount = discount,
+                                taxAmount = tax,
+                                amountTendered = first.tendered,
+                                paymentMethod = first.method,
+                                referenceNumber = first.referenceNumber,
+                                items = soldCart.map {
+                                    SaleRpcItem(it.product.id, it.quantity, it.unitPrice)
+                                },
+                                payments = payments,
+                                catalogEpoch = offlineStore.cachedCatalogEpoch(context.shop.id)
+                                    ?: error("Trusted catalog epoch missing. Reconnect before selling.")
                             )
-
-                            products = products.map { product ->
-                                val line = soldCart.firstOrNull { it.product.id == product.id }
-                                if (line != null && product.trackStock) {
-                                    product.copy(
-                                        stockQuantity = (product.stockQuantity - line.quantity).coerceAtLeast(0.0)
-                                    )
-                                } else product
+                            val paperWidth = prefs.getInt(
+                                "paper_width", settings.printerPaperWidthMm
+                            )
+                            val receipt = runCatching {
+                                OfflineReceiptFormatter.create(
+                                    shop = context.shop,
+                                    settings = settings,
+                                    clientKey = cashierSaleKey,
+                                    cashierId = context.userId,
+                                    cart = soldCart,
+                                    payments = payments,
+                                    discount = discount,
+                                    tax = tax,
+                                    paperWidth = paperWidth,
+                                    cashierLabel = StoreRepository.currentUserEmail()
+                                        ?: context.member.role,
+                                    footerFeedLines = ReceiptCutSettings.get(androidContext)
+                                )
+                            }.getOrElse { receiptError ->
+                                error = "Cannot save a printable offline receipt. Cart is still " +
+                                    "open: " + (receiptError.message ?: "Check receipt settings.")
+                                return@onFailure
                             }
-                            offlineStore.saveProducts(context.shop.id, products)
+                            val hubMode = LanStockHub.load(androidContext, context.shop.id).mode
+                            val hostStock: Map<String, Double>?
+                            try {
+                                hostStock = if (hubMode == "off") null
+                                else withContext(Dispatchers.IO) {
+                                    LanStockHub.reserve(
+                                        androidContext, context.shop.id, offlinePayload,
+                                        receipt.number, paperWidth, receipt.thermalBytes
+                                    )
+                                }
+                                // Host already committed both receipt and sale in one
+                                // transaction. Client mirrors them after host acceptance.
+                                if (hubMode != "host") {
+                                    offlineStore.enqueueSaleWithReceipt(
+                                        offlinePayload, receipt.number,
+                                        paperWidth, receipt.thermalBytes
+                                    )
+                                }
+                            } catch (saveFailure: Throwable) {
+                                error = "Offline checkout was NOT saved. Keep the cart open: " +
+                                    (saveFailure.message ?: "Tablet storage error.")
+                                return@onFailure
+                            }
 
-                            offlineQueued = provisionalTotal
-                            pendingCount = offlineStore.pendingSales().size
+                            if (hostStock != null) {
+                                // Commit host-authoritative quantities; never deduct twice.
+                                products = offlineStore.loadProducts(context.shop.id).map { p ->
+                                    hostStock[p.id]?.let { qty -> p.copy(stockQuantity = qty) } ?: p
+                                }
+                                offlineStore.saveProducts(context.shop.id, products)
+                                lanConnected = true
+                            } else {
+                                products = products.map { product ->
+                                    val line = soldCart.firstOrNull { it.product.id == product.id }
+                                    if (line != null && product.trackStock) {
+                                        product.copy(stockQuantity =
+                                            (product.stockQuantity - line.quantity).coerceAtLeast(0.0))
+                                    } else product
+                                }
+                                offlineStore.saveProducts(context.shop.id, products)
+                            }
+
+                            OfflineSyncWorker.requestOnReconnect(androidContext, context.shop.id)
+                            offlineQueued = OfflineQueuedReceipt(
+                                clientKey = cashierSaleKey,
+                                receiptNumber = receipt.number,
+                                provisionalTotal = provisionalTotal,
+                                paperWidth = paperWidth
+                            )
+                            offlinePrintMessage = null
+                            pendingCount = offlineStore.pendingSales(context.shop.id).size
+                            if (settings.autoPrintReceipt &&
+                                prefs.getString("printer_address", null) != null
+                            ) {
+                                printing = true
+                                val sendResult = LocalReceiptPrinter.print(
+                                    androidContext, receipt.thermalBytes
+                                )
+                                offlinePrintMessage = sendResult.fold(
+                                    onSuccess = {
+                                        "Provisional receipt sent to local printer. " +
+                                            "Check paper before retrying."
+                                    },
+                                    onFailure = {
+                                        "Receipt not printed. Cash sale is safely stored locally: " +
+                                            (it.message ?: "Check Bluetooth or USB.")
+                                    }
+                                )
+                                printing = false
+                            }
+                            pendingRetryKey = null
+                            pendingRetrySignature = null
                             cart = emptyList()
                             checkout = false
                             offlineMode = true

@@ -86,6 +86,29 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
           cp app/build/outputs/apk/debug/app-debug.apk "StorePOS-${RELEASE_NAME}.apk"
 
+      - name: Check signing certificate against installed v1.7.4 release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A new debug key would make Android reject an over-the-top update
+          # and could strand locally queued offline sales. Fail the release.
+          gh release download v1.7.4 \
+            --pattern 'StorePOS-v1.7.4.apk' \
+            --dir "$RUNNER_TEMP"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          old_cert="$("$APKSIGNER" verify --print-certs "$RUNNER_TEMP/StorePOS-v1.7.4.apk" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)"
+          new_cert="$("$APKSIGNER" verify --print-certs "StorePOS-${RELEASE_NAME}.apk" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)"
+          test -n "$old_cert" && test -n "$new_cert"
+          if [[ "$old_cert" != "$new_cert" ]]; then
+            echo "::error::Update signing certificate does not match v1.7.4. Do not distribute this APK."
+            exit 1
+          fi
+          echo "StorePOS signing continuity verified."
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:

@@ -24,6 +24,9 @@ import android.provider.Settings
 import com.storepos.app.BuildConfig
 import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.local.HybridConnectivity
+import com.storepos.app.data.local.OfflineBootCache
+import com.storepos.app.data.local.LanStockHub
 import com.storepos.app.data.model.LicenseAccess
 import com.storepos.app.data.model.PlanEntitlements
 import com.storepos.app.data.model.ShopContext
@@ -33,6 +36,7 @@ import com.storepos.app.ui.auth.RequiredPasswordChangeScreen
 import com.storepos.app.ui.auth.SetupShopScreen
 import com.storepos.app.ui.components.LoadingView
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 enum class AppPage(val label: String, val icon: ImageVector) {
     Dashboard("Dashboard", Icons.Rounded.Dashboard),
@@ -102,6 +106,12 @@ fun StorePosApp() {
             state = BootState.PasswordChange(StoreRepository.currentUserEmail())
             return
         }
+        if (!HybridConnectivity.hasInternet(androidContext)) {
+            val verified = OfflineBootCache.restore(androidContext, userId, deviceId)
+                ?: error("Offline startup needs a previously verified signed-in device.")
+            state = BootState.Ready(verified.first, verified.second, verified.third)
+            return
+        }
         val context = StoreRepository.loadShopContext()
         if (context == null) {
             state = BootState.Setup(StoreRepository.currentUserEmail())
@@ -116,6 +126,7 @@ fun StorePosApp() {
         )
         state = if (access.valid) {
             val entitlements = StoreRepository.shopEntitlements(context.shop.id)
+            runCatching { OfflineBootCache.save(androidContext, context, deviceId, access, entitlements) }
             BootState.Ready(context, access, entitlements)
         } else {
             BootState.LicenseGate(context, access)
@@ -125,10 +136,20 @@ fun StorePosApp() {
     suspend fun restoreSafely(fallback: BootState = BootState.Auth): Boolean {
         return runCatching { restore() }.fold(
             onSuccess = { true },
-            onFailure = {
-                error = StoreRepository.userMessage(it)
-                state = fallback
-                false
+            onFailure = { failure ->
+                val id = StoreRepository.currentUserId()
+                val previous = if (id != null && HybridConnectivity.isConnectionFailure(failure))
+                    OfflineBootCache.restore(androidContext, id, deviceId)
+                else null
+                if (previous != null) {
+                    state = BootState.Ready(previous.first, previous.second, previous.third)
+                    error = null
+                    true
+                } else {
+                    error = StoreRepository.userMessage(failure)
+                    state = fallback
+                    false
+                }
             }
         )
     }
@@ -405,6 +426,16 @@ private fun MainShell(
     entitlements: PlanEntitlements,
     onSignOut: () -> Unit
 ) {
+    val lanContext = LocalContext.current.applicationContext
+    LaunchedEffect(shopContext.shop.id) {
+        while (true) {
+            runCatching { LanStockHub.ensureRunning(lanContext, shopContext.shop.id) }
+            delay(10_000)
+        }
+    }
+    DisposableEffect(shopContext.shop.id) {
+        onDispose { LanStockHub.stop() }
+    }
     var permissionOverrides by remember(shopContext.member.id) {
         mutableStateOf<Map<String, Boolean>>(emptyMap())
     }
