@@ -366,6 +366,7 @@ fun SettingsPage(context: ShopContext) {
         }
 
         if (canAdmin) {
+            LanHubSettingsCard(context.shop.id)
             OfflineDatabaseSettingsCard(context.shop.id)
         }
 
