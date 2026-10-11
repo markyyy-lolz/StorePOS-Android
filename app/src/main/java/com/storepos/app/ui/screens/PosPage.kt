@@ -40,6 +40,10 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.LanStockHub
+import com.storepos.app.data.local.HybridConnectivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.storepos.app.data.local.OfflineSyncPolicy
 import com.storepos.app.data.local.OfflineSaleSynchronizer
 import com.storepos.app.data.local.OfflineInventorySynchronizer
@@ -150,6 +154,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var pendingCount by remember { mutableStateOf(0) }
     var needsReviewCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
+    var lanConnected by remember { mutableStateOf(false) }
+    var pendingRetryKey by remember { mutableStateOf<String?>(null) }
+    var pendingRetrySignature by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
@@ -554,6 +561,33 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
+    }
+
+    // Both tablets refresh the common HOST stock snapshot over local Wi-Fi.
+    // No internet is required, but the host must be powered on.
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            delay(4_000)
+            if (loading || checkout || preparingCheckout || printing) continue
+            val hub = LanStockHub.load(androidContext, context.shop.id)
+            if (hub.mode == "off") {
+                lanConnected = false
+                continue
+            }
+            val response = withContext(Dispatchers.IO) {
+                runCatching { LanStockHub.stock(androidContext, context.shop.id) }
+            }
+            response.onSuccess { counts ->
+                lanConnected = true
+                if (offlineMode && counts.isNotEmpty()) {
+                    val adjusted = offlineStore.loadProducts(context.shop.id).map { item ->
+                        counts[item.id]?.let { qty -> item.copy(stockQuantity = qty) } ?: item
+                    }
+                    products = adjusted
+                    offlineStore.saveProducts(context.shop.id, adjusted)
+                }
+            }.onFailure { lanConnected = false }
+        }
     }
 
     // Automatic retry while the POS register is open. Both tablets keep
@@ -1792,7 +1826,27 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         return@launch
                     }
 
-                    val cashierSaleKey = UUID.randomUUID().toString()
+                    // A cloud/LAN timeout is ambiguous. Retain this sale UUID
+                    // for an unchanged cart so a retry cannot sell the item twice.
+                    val signature = buildString {
+                        soldCart.forEach {
+                            append(it.product.id).append(':').append(it.quantity)
+                                .append(':').append(it.unitPrice).append(';')
+                        }
+                        append('|').append(customerId).append('|').append(discount)
+                            .append('|').append(tax)
+                        payments.forEach {
+                            append('|').append(it.method).append(':').append(it.amount)
+                        }
+                    }
+                    if (pendingRetryKey != null && signature != pendingRetrySignature) {
+                        error = "Previous payment result is uncertain. Verify original sale before editing cart."
+                        return@launch
+                    }
+                    val cashierSaleKey = pendingRetryKey ?: UUID.randomUUID().toString().also {
+                        pendingRetryKey = it
+                        pendingRetrySignature = signature
+                    }
                     runCatching {
                         if (offlineMode) {
                             // Avoid network calls while explicitly offline; cash sale and
@@ -1818,10 +1872,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastPayments = payments
                         lastSale = sale
                         lastSaleTraining = false
+                        pendingRetryKey = null
+                        pendingRetrySignature = null
                         receiptPrintedOnce = false
                         cart = emptyList()
                         checkout = false
-                        refresh()
+                        runCatching { refresh() }
 
                         if (settings.autoPrintReceipt && (prefs.getString("printer_address", null) != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct")) {
                             printing = true
@@ -1901,28 +1957,47 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                     "open: " + (receiptError.message ?: "Check receipt settings.")
                                 return@onFailure
                             }
+                            val hubMode = LanStockHub.load(androidContext, context.shop.id).mode
+                            val hostStock: Map<String, Double>?
                             try {
-                                offlineStore.enqueueSaleWithReceipt(
-                                    offlinePayload,
-                                    receipt.number,
-                                    paperWidth,
-                                    receipt.thermalBytes
-                                )
+                                hostStock = if (hubMode == "off") null
+                                else withContext(Dispatchers.IO) {
+                                    LanStockHub.reserve(
+                                        androidContext, context.shop.id, offlinePayload,
+                                        receipt.number, paperWidth, receipt.thermalBytes
+                                    )
+                                }
+                                // Host already committed both receipt and sale in one
+                                // transaction. Client mirrors them after host acceptance.
+                                if (hubMode != "host") {
+                                    offlineStore.enqueueSaleWithReceipt(
+                                        offlinePayload, receipt.number,
+                                        paperWidth, receipt.thermalBytes
+                                    )
+                                }
                             } catch (saveFailure: Throwable) {
                                 error = "Offline checkout was NOT saved. Keep the cart open: " +
                                     (saveFailure.message ?: "Tablet storage error.")
                                 return@onFailure
                             }
 
-                            products = products.map { product ->
-                                val line = soldCart.firstOrNull { it.product.id == product.id }
-                                if (line != null && product.trackStock) {
-                                    product.copy(
-                                        stockQuantity = (product.stockQuantity - line.quantity).coerceAtLeast(0.0)
-                                    )
-                                } else product
+                            if (hostStock != null) {
+                                // Commit host-authoritative quantities; never deduct twice.
+                                products = offlineStore.loadProducts(context.shop.id).map { p ->
+                                    hostStock[p.id]?.let { qty -> p.copy(stockQuantity = qty) } ?: p
+                                }
+                                offlineStore.saveProducts(context.shop.id, products)
+                                lanConnected = true
+                            } else {
+                                products = products.map { product ->
+                                    val line = soldCart.firstOrNull { it.product.id == product.id }
+                                    if (line != null && product.trackStock) {
+                                        product.copy(stockQuantity =
+                                            (product.stockQuantity - line.quantity).coerceAtLeast(0.0))
+                                    } else product
+                                }
+                                offlineStore.saveProducts(context.shop.id, products)
                             }
-                            offlineStore.saveProducts(context.shop.id, products)
 
                             OfflineSyncWorker.requestOnReconnect(androidContext, context.shop.id)
                             offlineQueued = OfflineQueuedReceipt(
@@ -1952,6 +2027,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 )
                                 printing = false
                             }
+                            pendingRetryKey = null
+                            pendingRetrySignature = null
                             cart = emptyList()
                             checkout = false
                             offlineMode = true
