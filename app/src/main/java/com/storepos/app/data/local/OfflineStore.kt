@@ -125,6 +125,124 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /**
+     * A LAN-hosted sale is atomically checked against the HOST's last cached stock,
+     * saved to its durable outbox and deducted once. All POS devices send requests
+     * through the same database transaction, so two tablets cannot both claim
+     * the final unit while the host is reachable.
+     */
+    fun acceptLanSale(payload: OfflineSalePayload): Map<String, Double> {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val raw = database.query(
+                "cache_blob", arrayOf("payload"), "cache_key=?",
+                arrayOf("products:" + payload.shopId), null, null, null
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                ?: error("Host inventory not cached. Load this shop online on the host first.")
+            val catalog = json.decodeFromString<List<Product>>(raw)
+            require(catalog.isNotEmpty()) { "No local product catalog exists for this shop." }
+            val known = database.query(
+                "pending_sales", arrayOf("id"), "id=?",
+                arrayOf(payload.clientKey), null, null, null
+            ).use { it.moveToFirst() }
+            if (!known) {
+                val grouped = payload.items.groupBy { it.productId }
+                    .mapValues { (_, rows) -> rows.sumOf { it.quantity } }
+                require(grouped.isNotEmpty() && payload.items.all { it.quantity > 0.0 && it.quantity.isFinite() }) {
+                    "Invalid sale items."
+                }
+                val byId = catalog.associateBy { it.id }
+                grouped.forEach { (productId, quantity) ->
+                    val product = byId[productId] ?: error("Product missing from host catalog.")
+                    require(product.isActive) { "A product in this sale is inactive." }
+                    require(!product.serialTracked && !product.batchTracked &&
+                        product.retailParentId == null && product.wholesaleMin <= 0) {
+                        "Advanced stock validation requires StorePOS Cloud."
+                    }
+                    if (product.trackStock) {
+                        require(product.stockQuantity + 0.000001 >= quantity) {
+                            "Stock conflict: " + product.name + " has only " + product.stockQuantity + " remaining on LAN host."
+                        }
+                    }
+                }
+                val updated = catalog.map { product ->
+                    val deduction = grouped[product.id] ?: 0.0
+                    if (product.trackStock && deduction > 0) {
+                        product.copy(stockQuantity = (product.stockQuantity - deduction).coerceAtLeast(0.0))
+                    } else product
+                }
+                database.insertOrThrow(
+                    "pending_sales", null,
+                    ContentValues().apply {
+                        put("id", payload.clientKey)
+                        put("payload", json.encodeToString(payload))
+                        put("created_at", System.currentTimeMillis())
+                        putNull("last_error")
+                    }
+                )
+                database.insertWithOnConflict(
+                    "cache_blob", null,
+                    ContentValues().apply {
+                        put("cache_key", "products:" + payload.shopId)
+                        put("payload", json.encodeToString(updated))
+                        put("updated_at", System.currentTimeMillis())
+                    }, SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            val result = database.query(
+                "cache_blob", arrayOf("payload"), "cache_key=?",
+                arrayOf("products:" + payload.shopId), null, null, null
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                ?: error("Host inventory snapshot unavailable.")
+            val counts = json.decodeFromString<List<Product>>(result)
+                .associate { it.id to it.stockQuantity }
+            database.setTransactionSuccessful()
+            return counts
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    /** Save an acknowledged LAN sale with host-authoritative inventory numbers. */
+    fun saveLanAcknowledgedSale(payload: OfflineSalePayload, authoritative: Map<String, Double>) {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val cache = loadProducts(payload.shopId)
+            require(cache.isNotEmpty()) { "Missing local inventory catalog." }
+            val updated = cache.map { item ->
+                authoritative[item.id]?.let { newStock ->
+                    item.copy(stockQuantity = newStock)
+                } ?: item
+            }
+            enqueueSale(payload)
+            saveProducts(payload.shopId, updated)
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    /** Apply the LAN hub's stock snapshot without overwriting product metadata. */
+    fun applyLanStock(shopId: String, authoritative: Map<String, Double>): List<Product> {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val catalog = loadProducts(shopId)
+            val adjusted = catalog.map { product ->
+                authoritative[product.id]?.let {
+                    product.copy(stockQuantity = it)
+                } ?: product
+            }
+            saveProducts(shopId, adjusted)
+            database.setTransactionSuccessful()
+            return adjusted
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun pendingSales(): List<PendingOfflineSale> =
         readableDatabase.query(
             "pending_sales",
