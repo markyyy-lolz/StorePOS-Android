@@ -109,6 +109,22 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    /**
+     * Keep local pending sale and local stock snapshot in the same transaction.
+     * If saving stock fails, no "successful" checkout is accepted.
+     */
+    fun enqueueSaleWithProducts(payload: OfflineSalePayload, products: List<Product>) {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            enqueueSale(payload)
+            saveProducts(payload.shopId, products)
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun pendingSales(): List<PendingOfflineSale> =
         readableDatabase.query(
             "pending_sales",
