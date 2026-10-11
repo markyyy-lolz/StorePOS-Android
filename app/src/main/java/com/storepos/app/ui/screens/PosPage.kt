@@ -604,7 +604,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             // Standalone mode is only a device-local ledger; cross-tablet stock
             // cannot be guaranteed if there is no reachable LAN host.
             offlineStore.enqueueSaleWithProducts(payload, adjustedProducts)
-            products = adjustedProducts
+            products = offlineStore.loadProducts(context.shop.id)
         }
         pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
 
