@@ -26,6 +26,7 @@ import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.local.HybridConnectivity
 import com.storepos.app.data.local.OfflineBootCache
+import com.storepos.app.data.local.LanStockHub
 import com.storepos.app.data.model.LicenseAccess
 import com.storepos.app.data.model.PlanEntitlements
 import com.storepos.app.data.model.ShopContext
@@ -35,6 +36,7 @@ import com.storepos.app.ui.auth.RequiredPasswordChangeScreen
 import com.storepos.app.ui.auth.SetupShopScreen
 import com.storepos.app.ui.components.LoadingView
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 enum class AppPage(val label: String, val icon: ImageVector) {
     Dashboard("Dashboard", Icons.Rounded.Dashboard),
@@ -432,6 +434,18 @@ private fun MainShell(
     entitlements: PlanEntitlements,
     onSignOut: () -> Unit
 ) {
+    val lanContext = LocalContext.current.applicationContext
+    // Keep the local host available throughout the StorePOS foreground session.
+    // No internet or cloud account network call is needed for LAN inventory.
+    LaunchedEffect(shopContext.shop.id) {
+        while (true) {
+            runCatching { LanStockHub.ensureRunning(lanContext, shopContext.shop.id) }
+            delay(10_000)
+        }
+    }
+    DisposableEffect(shopContext.shop.id) {
+        onDispose { LanStockHub.stop() }
+    }
     var permissionOverrides by remember(shopContext.member.id) {
         mutableStateOf<Map<String, Boolean>>(emptyMap())
     }
