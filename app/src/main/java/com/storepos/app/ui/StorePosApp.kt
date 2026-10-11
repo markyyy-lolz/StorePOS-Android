@@ -24,6 +24,8 @@ import android.provider.Settings
 import com.storepos.app.BuildConfig
 import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.local.HybridConnectivity
+import com.storepos.app.data.local.OfflineBootCache
 import com.storepos.app.data.model.LicenseAccess
 import com.storepos.app.data.model.PlanEntitlements
 import com.storepos.app.data.model.ShopContext
@@ -102,6 +104,14 @@ fun StorePosApp() {
             state = BootState.PasswordChange(StoreRepository.currentUserEmail())
             return
         }
+        // Re-open the LAST verified shop locally when Wi-Fi has no Internet.
+        // Fresh sign-in, device activation and expired licenses remain cloud-gated.
+        if (!HybridConnectivity.hasInternet(androidContext)) {
+            val snapshot = OfflineBootCache.restore(androidContext, userId, deviceId)
+                ?: error("No verified offline session. Connect once with internet, sign in with Stay signed in enabled, and enter StorePOS to activate offline access.")
+            state = BootState.Ready(snapshot.first, snapshot.second, snapshot.third)
+            return
+        }
         val context = StoreRepository.loadShopContext()
         if (context == null) {
             state = BootState.Setup(StoreRepository.currentUserEmail())
@@ -116,6 +126,11 @@ fun StorePosApp() {
         )
         state = if (access.valid) {
             val entitlements = StoreRepository.shopEntitlements(context.shop.id)
+            // Persist only current, valid user/shop/device entitlements. A failed
+            // cache write MUST NOT prevent an otherwise valid online sign-in.
+            runCatching {
+                OfflineBootCache.save(androidContext, context, deviceId, access, entitlements)
+            }
             BootState.Ready(context, access, entitlements)
         } else {
             BootState.LicenseGate(context, access)
@@ -125,10 +140,25 @@ fun StorePosApp() {
     suspend fun restoreSafely(fallback: BootState = BootState.Auth): Boolean {
         return runCatching { restore() }.fold(
             onSuccess = { true },
-            onFailure = {
-                error = StoreRepository.userMessage(it)
-                state = fallback
-                false
+            onFailure = { failure ->
+                val userId = StoreRepository.currentUserId()
+                val cached = if (userId != null && (
+                    !HybridConnectivity.hasInternet(androidContext) ||
+                    HybridConnectivity.isConnectionFailure(failure)
+                )) {
+                    OfflineBootCache.restore(androidContext, userId, deviceId)
+                } else null
+                if (cached != null) {
+                    state = BootState.Ready(cached.first, cached.second, cached.third)
+                    error = null
+                    true
+                } else {
+                    error = if (!HybridConnectivity.hasInternet(androidContext)) {
+                        "Offline login unavailable on this device. Connect once to StorePOS Cloud, keep Stay signed in enabled, and refresh your shop license and catalog."
+                    } else StoreRepository.userMessage(failure)
+                    state = fallback
+                    false
+                }
             }
         )
     }
@@ -146,7 +176,8 @@ fun StorePosApp() {
         BootState.Loading -> LoadingView("Starting StorePOS…")
         BootState.Auth -> AuthScreen(
             busy = busy,
-            error = error,
+            error = error ?: if (!HybridConnectivity.hasInternet(androidContext))
+                "No internet: new sign-in requires StorePOS Cloud. A previously verified, signed-in device can use offline checkout." else null,
             notice = notice,
             onSubmit = { displayName, email, password, signUp, staySignedIn, captchaToken ->
                 scope.launch {
@@ -435,8 +466,13 @@ private fun MainShell(
     }
     // Persist the destination across Activity recreation (e.g. returning
     // from the ZXing camera scanner) instead of defaulting to Dashboard.
+    val launchContext = LocalContext.current
     var pageName by rememberSaveable(shopContext.shop.id) {
-        mutableStateOf(AppPage.Dashboard.name)
+        mutableStateOf(
+            if (!HybridConnectivity.hasInternet(launchContext) && AppPage.POS in pagesForRole(shopContext.member.role))
+                AppPage.POS.name
+            else AppPage.Dashboard.name
+        )
     }
     val page = restoredAppPage(pageName)
     var signOutConfirm by remember { mutableStateOf(false) }

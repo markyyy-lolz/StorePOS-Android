@@ -40,6 +40,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.HybridConnectivity
 import com.storepos.app.data.local.OfflineSyncPolicy
 import com.storepos.app.data.local.OfflineSaleSynchronizer
 import com.storepos.app.data.local.OfflineInventorySynchronizer
@@ -294,6 +295,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     suspend fun refresh() {
         try {
+            if (!HybridConnectivity.hasInternet(androidContext)) {
+                throw java.io.IOException("Internet unavailable; using the previously trusted local product catalog.")
+            }
             // Do not overwrite the local optimistic product cache while
             // another offline inventory operation is waiting or rejected.
             // This matters if the POS and Inventory screens share this tablet.
@@ -394,7 +398,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             serialCheckoutProduct = serialLine.product
             return
         }
-        if (offlineMode) {
+        if (offlineMode || !HybridConnectivity.hasInternet(androidContext)) {
+            offlineMode = true
             if (requiresRetailOnline()) {
                 error = "Packs, promos, weighed items, batches and serialized stock require StorePOS Cloud checkout. Reconnect before completing this cart."
                 return
@@ -424,13 +429,29 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     retailQuote = quote.copy(subtotal = adjustedSubtotal)
                     checkout = true
                 }
-                .onFailure { error = StoreRepository.userMessage(it) }
+                .onFailure { failure ->
+                    if (HybridConnectivity.isConnectionFailure(failure) ||
+                        !HybridConnectivity.hasInternet(androidContext)) {
+                        offlineMode = true
+                        when {
+                            !offlineStore.isProductCacheTrusted(context.shop.id) ->
+                                error = "Reconnect once to verify the current shop inventory before offline checkout."
+                            requiresRetailOnline() ->
+                                error = "This advanced transaction requires online pricing. Basic cash sales remain available offline."
+                            else -> {
+                                retailQuote = null
+                                error = null
+                                checkout = true
+                            }
+                        }
+                    } else error = StoreRepository.userMessage(failure)
+                }
             preparingCheckout = false
         }
     }
 
     suspend fun syncOfflineSales() {
-        if (syncingOffline) return
+        if (syncingOffline || !HybridConnectivity.hasInternet(androidContext)) return
         syncingOffline = true
         try {
             val summary = OfflineSaleSynchronizer.syncShop(context.shop.id, offlineStore)
