@@ -305,7 +305,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 retailFavorites = rf.await()
             }
             products = offlineStore.saveCloudProductsWithPending(context.shop.id, products)
-            offlineStore.saveCustomers(context.shop.id, customers)
+            customers = offlineStore.saveCloudCustomersWithPending(context.shop.id, customers)
             offlineStore.saveMotorcycles(context.shop.id, motorcycles)
 
             val open = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
