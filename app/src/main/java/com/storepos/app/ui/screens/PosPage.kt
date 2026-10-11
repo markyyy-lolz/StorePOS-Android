@@ -141,6 +141,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var pendingCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
     var lanConnected by remember { mutableStateOf(false) }
+    var retrySaleKey by remember { mutableStateOf<String?>(null) }
+    var retrySaleSignature by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
@@ -1848,7 +1850,27 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         return@launch
                     }
 
-                    val checkoutKey = UUID.randomUUID().toString()
+                    val signature = buildString {
+                        soldCart.forEach {
+                            append(it.product.id).append(':').append(it.quantity)
+                                .append(':').append(it.unitPrice).append(';')
+                        }
+                        append('|').append(customerId).append('|').append(discount)
+                            .append('|').append(tax).append('|')
+                        payments.forEach {
+                            append(it.method).append(':').append(it.amount)
+                                .append(':').append(it.referenceNumber).append(';')
+                        }
+                    }
+                    if (retrySaleKey != null && retrySaleSignature != signature) {
+                        error = "Previous checkout result is uncertain. Reconcile the original transaction " +
+                            "before changing this cart or collecting another payment."
+                        return@launch
+                    }
+                    val checkoutKey = retrySaleKey ?: UUID.randomUUID().toString().also {
+                        retrySaleKey = it
+                        retrySaleSignature = signature
+                    }
                     val restriction = offlineCheckoutRestriction(
                         soldCart, payments, managerPin, charges, dueDate
                     )
@@ -1862,6 +1884,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 soldCart, receiptCart, customerId, bikeId,
                                 payments, discount, tax, checkoutKey
                             )
+                        }.onSuccess {
+                            retrySaleKey = null
+                            retrySaleSignature = null
                         }.onFailure {
                             error = "Unable to save offline sale. Do not hand over the receipt: " +
                                 (it.localizedMessage ?: "Local storage unavailable")
@@ -1888,10 +1913,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastPayments = payments
                         lastSale = sale
                         lastSaleTraining = false
+                        lastSaleOfflinePending = false
+                        retrySaleKey = null
+                        retrySaleSignature = null
                         receiptPrintedOnce = false
                         cart = emptyList()
                         checkout = false
-                        refresh()
+                        runCatching { refresh() }
 
                         if (settings.autoPrintReceipt && (prefs.getString("printer_address", null) != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct")) {
                             printing = true
@@ -1912,6 +1940,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                     soldCart, receiptCart, customerId, bikeId,
                                     payments, discount, tax, checkoutKey
                                 )
+                            }.onSuccess {
+                                retrySaleKey = null
+                                retrySaleSignature = null
                             }.onFailure {
                                 error = "Unable to save offline sale. Please verify transaction " +
                                     "before retrying: " + (it.localizedMessage ?: "Local storage unavailable")
@@ -1919,6 +1950,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         } else {
                             // Never treat server rejections, insufficient stock or declined
                             // payments as an accepted offline sale.
+                            retrySaleKey = null
+                            retrySaleSignature = null
                             error = StoreRepository.userMessage(failure)
                         }
                     }
