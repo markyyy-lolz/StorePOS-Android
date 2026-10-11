@@ -41,6 +41,9 @@ import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.local.HybridConnectivity
+import com.storepos.app.data.local.LanStockHub
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -137,6 +140,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var offlineQueued by remember { mutableStateOf<Double?>(null) }
     var pendingCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
+    var lanConnected by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
@@ -345,7 +349,6 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             val base = line.product.retailParentId?.let { parentId -> products.firstOrNull { it.id == parentId } }
             line.product.retailParentId != null ||
                 line.product.wholesaleMin > 0 ||
-                line.product.isWeighed ||
                 line.product.batchTracked ||
                 line.product.serialTracked ||
                 base?.batchTracked == true ||
@@ -374,7 +377,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         if (offlineMode || !HybridConnectivity.hasInternet(androidContext)) {
             offlineMode = true
             if (requiresRetailOnline()) {
-                error = "Packs, promos, weighed items, batches and serialized stock require StorePOS Cloud checkout. Reconnect before completing this cart."
+                error = "Pack/wholesale pricing, active promotions, batch stock and serialized items require online checkout. Basic weighed quantity is supported offline."
                 return
             }
             retailQuote = null
@@ -579,9 +582,30 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 product.copy(stockQuantity = (product.stockQuantity - soldQuantity).coerceAtLeast(0.0))
             } else product
         }
-        // Commit queue and device stock atomically before clearing the customer's cart.
-        offlineStore.enqueueSaleWithProducts(payload, adjustedProducts)
-        products = adjustedProducts
+        // Host mode: both tablets reserve against the SAME serialized host ledger.
+        // Client mode: block checkout if its host cannot be reached. Never
+        // silently fall back to independent stock deduction for tracked items.
+        val hubMode = LanStockHub.load(androidContext, context.shop.id).mode
+        if (hubMode != "off") {
+            val authoritative = withContext(Dispatchers.IO) {
+                LanStockHub.reserve(androidContext, context.shop.id, payload)
+            }
+            if (hubMode == "client") {
+                withContext(Dispatchers.IO) {
+                    offlineStore.saveLanAcknowledgedSale(payload, authoritative)
+                }
+            }
+            products = offlineStore.loadProducts(context.shop.id)
+            if (hubMode == "client") {
+                products = offlineStore.applyLanStock(context.shop.id, authoritative)
+            }
+            lanConnected = true
+        } else {
+            // Standalone mode is only a device-local ledger; cross-tablet stock
+            // cannot be guaranteed if there is no reachable LAN host.
+            offlineStore.enqueueSaleWithProducts(payload, adjustedProducts)
+            products = adjustedProducts
+        }
         pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
 
         val subtotal = receiptCart.sumOf { it.lineTotal }
@@ -649,6 +673,31 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     // POS remains operational during an outage; when validated internet returns,
     // replay locally saved sales and refresh the catalog without manual intervention.
+    // Reconcile fast-changing stock between two tablets without cloud internet.
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            delay(4_000)
+            if (loading || checkout || preparingCheckout || printing) continue
+            val config = LanStockHub.load(androidContext, context.shop.id)
+            if (config.mode == "off") {
+                lanConnected = false
+                continue
+            }
+            val response = withContext(Dispatchers.IO) {
+                runCatching { LanStockHub.stock(androidContext, context.shop.id) }
+            }
+            response.onSuccess { quantities ->
+                lanConnected = true
+                if (quantities.isNotEmpty() && (offlineMode ||
+                        !HybridConnectivity.hasInternet(androidContext))) {
+                    products = offlineStore.applyLanStock(context.shop.id, quantities)
+                }
+            }.onFailure {
+                lanConnected = false
+            }
+        }
+    }
+
     LaunchedEffect(context.shop.id) {
         while (true) {
             delay(30_000)
@@ -815,6 +864,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     }
                     if (offlineMode) {
                         AssistChip(onClick = {}, label = { Text("OFFLINE") })
+                        val hubMode = LanStockHub.load(androidContext, context.shop.id).mode
+                        if (hubMode != "off") {
+                            AssistChip(
+                                onClick = {},
+                                label = { Text(if (lanConnected) "LAN INVENTORY READY" else "LAN HUB DISCONNECTED") }
+                            )
+                        }
                     } else {
                         AssistChip(
                             onClick = {},
