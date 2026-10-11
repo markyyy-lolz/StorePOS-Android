@@ -13,7 +13,7 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
     "motopos_offline.db",
     null,
-    1
+    2
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -40,9 +40,20 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
+        createLanSeenTable(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // Non-destructive migration: preserve all existing queues, products and customers.
+        if (oldVersion < 2) createLanSeenTable(db)
+    }
+
+    private fun createLanSeenTable(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS lan_seen_sales (" +
+                "id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, created_at INTEGER NOT NULL)"
+        )
+    }
 
     private fun putBlob(key: String, payload: String) {
         writableDatabase.insertWithOnConflict(
@@ -143,8 +154,8 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             val catalog = json.decodeFromString<List<Product>>(raw)
             require(catalog.isNotEmpty()) { "No local product catalog exists for this shop." }
             val known = database.query(
-                "pending_sales", arrayOf("id"), "id=?",
-                arrayOf(payload.clientKey), null, null, null
+                "lan_seen_sales", arrayOf("id"), "id=? AND shop_id=?",
+                arrayOf(payload.clientKey, payload.shopId), null, null, null
             ).use { it.moveToFirst() }
             if (!known) {
                 val grouped = payload.items.groupBy { it.productId }
@@ -172,6 +183,14 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
                         product.copy(stockQuantity = (product.stockQuantity - deduction).coerceAtLeast(0.0))
                     } else product
                 }
+                database.insertOrThrow(
+                    "lan_seen_sales", null,
+                    ContentValues().apply {
+                        put("id", payload.clientKey)
+                        put("shop_id", payload.shopId)
+                        put("created_at", System.currentTimeMillis())
+                    }
+                )
                 database.insertOrThrow(
                     "pending_sales", null,
                     ContentValues().apply {
