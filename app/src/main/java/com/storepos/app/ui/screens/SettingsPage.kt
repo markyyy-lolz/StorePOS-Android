@@ -365,6 +365,10 @@ fun SettingsPage(context: ShopContext) {
             }
         }
 
+        if (canAdmin) {
+            OfflineDatabaseSettingsCard(context.shop.id)
+        }
+
         MotoCard(Modifier.fillMaxWidth()) {
             Text("Cloud backup & billing", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
