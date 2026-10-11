@@ -289,6 +289,21 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 val rp = async { RetailRepository.promos(context.shop.id) }
                 val rf = async { RetailRepository.favorites(context.shop.id) }
                 products = p.await()
+                // When this tablet has unsynced sales, show conservative stock
+                // counts even after a successful catalog download.
+                val outstandingQuantities = offlineStore.pendingSales()
+                    .filter { it.payload.shopId == context.shop.id }
+                    .flatMap { it.payload.items }
+                    .groupBy { it.productId }
+                    .mapValues { (_, lines) -> lines.sumOf { it.quantity } }
+                if (outstandingQuantities.isNotEmpty()) {
+                    products = products.map { product ->
+                        val reserved = outstandingQuantities[product.id] ?: 0.0
+                        if (product.trackStock && reserved > 0.0) {
+                            product.copy(stockQuantity = (product.stockQuantity - reserved).coerceAtLeast(0.0))
+                        } else product
+                    }
+                }
                 customers = c.await()
                 motorcycles = m.await()
                 settings = s.await()
@@ -417,6 +432,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 runCatching { refresh() }
             } else if (pendingCount > 0 && pending.isNotEmpty()) {
                 error = "Some offline sales still require sync. Open Admin Center > Sync Center to review errors."
+                // A failed historical replay must not keep the POS in offline
+                // mode once new cloud sales are possible.
+                runCatching { refresh() }
             }
         } finally {
             syncingOffline = false
@@ -718,7 +736,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         paymongoFinalizeError = null
                         paymongoPaymentReceived = false
                         error = null
-                        refresh()
+                        runCatching { refresh() }
+                            .onFailure { error = "Sale saved, but catalog refresh failed: " + StoreRepository.userMessage(it) }
 
                         if (settings.autoPrintReceipt && (prefs.getString("printer_address", null) != null || com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct")) {
                             printing = true
