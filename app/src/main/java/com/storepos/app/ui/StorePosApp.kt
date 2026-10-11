@@ -24,6 +24,8 @@ import android.provider.Settings
 import com.storepos.app.BuildConfig
 import com.storepos.app.data.AdminRepository
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.local.HybridConnectivity
+import com.storepos.app.data.local.OfflineBootCache
 import com.storepos.app.data.model.LicenseAccess
 import com.storepos.app.data.model.PlanEntitlements
 import com.storepos.app.data.model.ShopContext
@@ -102,6 +104,15 @@ fun StorePosApp() {
             state = BootState.PasswordChange(StoreRepository.currentUserEmail())
             return
         }
+        // Only a previously online-verified device with a matching persisted
+        // authenticated user may start while the internet is disconnected.
+        if (!HybridConnectivity.hasInternet(androidContext)) {
+            val snapshot = OfflineBootCache.restore(androidContext, userId, deviceId)
+                ?: error("Offline login unavailable. Sign in and validate this device online first, then enable Stay signed in.")
+            state = BootState.Ready(snapshot.first, snapshot.second, snapshot.third)
+            notice = "OFFLINE MODE • Using last verified license and locally cached catalog."
+            return
+        }
         val context = StoreRepository.loadShopContext()
         if (context == null) {
             state = BootState.Setup(StoreRepository.currentUserEmail())
@@ -116,6 +127,9 @@ fun StorePosApp() {
         )
         state = if (access.valid) {
             val entitlements = StoreRepository.shopEntitlements(context.shop.id)
+            runCatching {
+                OfflineBootCache.save(androidContext, context, deviceId, access, entitlements)
+            }
             BootState.Ready(context, access, entitlements)
         } else {
             BootState.LicenseGate(context, access)
@@ -125,10 +139,23 @@ fun StorePosApp() {
     suspend fun restoreSafely(fallback: BootState = BootState.Auth): Boolean {
         return runCatching { restore() }.fold(
             onSuccess = { true },
-            onFailure = {
-                error = StoreRepository.userMessage(it)
-                state = fallback
-                false
+            onFailure = { failure ->
+                // Network timeout during boot must not lock out a previously
+                // verified device, but never bypass invalid licenses or users.
+                val uid = StoreRepository.currentUserId()
+                val cached = if (uid != null && HybridConnectivity.isConnectionFailure(failure)) {
+                    OfflineBootCache.restore(androidContext, uid, deviceId)
+                } else null
+                if (cached != null) {
+                    state = BootState.Ready(cached.first, cached.second, cached.third)
+                    notice = "OFFLINE MODE • Cached license; sales queue locally until reconnection."
+                    error = null
+                    true
+                } else {
+                    error = StoreRepository.userMessage(failure)
+                    state = fallback
+                    false
+                }
             }
         )
     }
