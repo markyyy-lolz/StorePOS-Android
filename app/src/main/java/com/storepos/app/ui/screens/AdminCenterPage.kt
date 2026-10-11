@@ -701,6 +701,7 @@ private fun DiagnosticsTab(
     schemaHealth: JsonObject?,
     latestVersion: AppVersion?
 ) {
+    var expandedHealthGroup by remember(health) { mutableStateOf<String?>(null) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -769,20 +770,91 @@ private fun DiagnosticsTab(
         item {
             MotoCard(Modifier.fillMaxWidth()) {
                 Text("Data Health", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                if (health == null) {
-                    Text("Data Health is temporarily unavailable.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else if (health.isEmpty()) {
-                    Text("No health issues reported.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (health == null || health.isEmpty()) {
+                    Text(
+                        "Cloud health results are unavailable. Connect and tap Refresh to check.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 } else {
-                    health.entries.forEach { entry ->
+                    val groups = healthGroups(health)
+                    val issueCount = groups.sumOf { it.results?.size ?: 0 }
+                    Text(
+                        "$issueCount issue(s) across the standard product and inventory checks.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    groups.forEach { group ->
+                        val count = group.results?.size
                         Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(entry.key.replace("_", " ").replaceFirstChar { it.uppercase() })
-                            Text(entry.value.toString(), fontWeight = FontWeight.Bold)
+                            Icon(
+                                when {
+                                    count == null -> Icons.Rounded.HelpOutline
+                                    count == 0 -> Icons.Rounded.CheckCircle
+                                    else -> Icons.Rounded.WarningAmber
+                                },
+                                contentDescription = null,
+                                tint = if (count == null || count > 0)
+                                    MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(group.label, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    when (count) {
+                                        null -> "Result unavailable"
+                                        0 -> "No issues"
+                                        1 -> "1 record needs review"
+                                        else -> "$count records need review"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (count != null && count > 0) {
+                                TextButton(onClick = {
+                                    expandedHealthGroup = if (expandedHealthGroup == group.key)
+                                        null else group.key
+                                }) {
+                                    Text(if (expandedHealthGroup == group.key) "Hide" else "View $count")
+                                }
+                            }
+                        }
+                        if (count != null && count > 0 && expandedHealthGroup == group.key) {
+                            Column(Modifier.fillMaxWidth().padding(start = 32.dp, bottom = 10.dp)) {
+                                group.results.take(30).forEachIndexed { index, record ->
+                                    Text(
+                                        "${index + 1}. " + healthRecordTitle(record),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    val details = healthRecordDescription(record)
+                                    if (details.isNotBlank()) {
+                                        Text(
+                                            details,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                                if (count > 30) {
+                                    Text(
+                                        "Showing first 30 of $count records. Review remaining items in StorePOS inventory.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
                         }
                     }
+                    Text(
+                        "Missing cost is a catalog warning, not a selling-price change. " +
+                            "Verify the actual product cost before editing anything.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
