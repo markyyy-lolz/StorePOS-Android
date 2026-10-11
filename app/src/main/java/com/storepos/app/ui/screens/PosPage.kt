@@ -40,6 +40,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.HybridConnectivity
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -116,6 +117,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     var lastSale by remember { mutableStateOf<Sale?>(null) }
     var lastSaleTraining by remember { mutableStateOf(false) }
+    var lastSaleOfflinePending by remember { mutableStateOf(false) }
     var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
     var lastReceiptToken by remember { mutableStateOf<String?>(null) }
@@ -161,7 +163,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         ReceiptPdfExporter.render(
             shop = context.shop,
             sale = sale,
-            settings = settings,
+            settings = if (lastSaleOfflinePending) settings.copy(receiptTitle = "OFFLINE SALE - PENDING SYNC") else settings,
             lines = lastReceiptCart.map { line ->
                 PdfReceiptLine(
                     name = line.product.name,
@@ -273,6 +275,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     suspend fun refresh() {
         try {
+            if (!HybridConnectivity.hasInternet(androidContext)) {
+                throw java.io.IOException("Internet unavailable; loading the local SQLite catalog")
+            }
             coroutineScope {
                 val p = async { StoreRepository.products(context.shop.id) }
                 val c = async { StoreRepository.customers(context.shop.id) }
@@ -317,7 +322,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         ) {
             runCatching { PayMongoRepository.integration(context.shop.id) }.getOrNull()
         } else null
-        pendingCount = offlineStore.pendingSales().size
+        pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
     }
 
     fun requiresRetailOnline(lines: List<CartLine> = cart): Boolean =
@@ -351,7 +356,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             serialCheckoutProduct = serialLine.product
             return
         }
-        if (offlineMode) {
+        if (offlineMode || !HybridConnectivity.hasInternet(androidContext)) {
+            offlineMode = true
             if (requiresRetailOnline()) {
                 error = "Packs, promos, weighed items, batches and serialized stock require StorePOS Cloud checkout. Reconnect before completing this cart."
                 return
@@ -377,24 +383,43 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     retailQuote = quote.copy(subtotal = adjustedSubtotal)
                     checkout = true
                 }
-                .onFailure { error = StoreRepository.userMessage(it) }
+                .onFailure { failure ->
+                    if (HybridConnectivity.isConnectionFailure(failure)) {
+                        offlineMode = true
+                        if (!requiresRetailOnline()) {
+                            retailQuote = null
+                            checkout = true
+                        } else {
+                            error = "Advanced retail items require cloud pricing; reconnect before checkout."
+                        }
+                    } else error = StoreRepository.userMessage(failure)
+                }
             preparingCheckout = false
         }
     }
 
     suspend fun syncOfflineSales() {
+        if (syncingOffline || !HybridConnectivity.hasInternet(androidContext)) return
         syncingOffline = true
-        val pending = offlineStore.pendingSales()
-        pending.forEach { queued ->
-            runCatching { StoreRepository.completeOfflineSale(queued.payload) }
-                .onSuccess { offlineStore.removePendingSale(queued.id) }
-                .onFailure { offlineStore.setPendingError(queued.id, StoreRepository.userMessage(it)) }
-        }
-        pendingCount = offlineStore.pendingSales().size
-        syncingOffline = false
-        if (pendingCount == 0 && pending.isNotEmpty()) {
-            error = null
-            runCatching { refresh() }
+        try {
+            val pending = offlineStore.pendingSales()
+                .filter { it.payload.shopId == context.shop.id }
+            pending.forEach { queued ->
+                runCatching { StoreRepository.completeOfflineSale(queued.payload) }
+                    .onSuccess { offlineStore.removePendingSale(queued.id) }
+                    .onFailure {
+                        offlineStore.setPendingError(queued.id, StoreRepository.userMessage(it))
+                    }
+            }
+            pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
+            if (pendingCount == 0 && pending.isNotEmpty()) {
+                error = null
+                runCatching { refresh() }
+            } else if (pendingCount > 0 && pending.isNotEmpty()) {
+                error = "Some offline sales still require sync. Open Admin Center > Sync Center to review errors."
+            }
+        } finally {
+            syncingOffline = false
         }
     }
 
@@ -421,7 +446,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             shopAddress = context.shop.address,
             shopPhone = context.shop.phone,
             shopTin = context.shop.tin,
-            receiptTitle = settings.receiptTitle,
+            receiptTitle = if (sale.id.startsWith("offline-")) "OFFLINE SALE - PENDING SYNC" else settings.receiptTitle,
             showAddress = settings.receiptShowAddress,
             showPhone = settings.receiptShowPhone,
             showTin = settings.receiptShowTin,
@@ -433,7 +458,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             sectionOrder = settings.receiptSectionOrder,
             footerFeedLines = ReceiptCutSettings.get(androidContext)
         )
-        if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct") {
+        if (com.storepos.app.printing.SharedPrintRepository.mode(androidContext) != "direct" &&
+            (HybridConnectivity.hasInternet(androidContext) || prefs.getString("printer_address", null).isNullOrBlank())) {
             val printerQueue = com.storepos.app.printing.SharedPrintRepository
             val jobKey = printerQueue.requestKey(sale.id,receiptPrintedOnce)
             val deviceId = printerQueue.deviceId(androidContext)
@@ -500,6 +526,25 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
+    }
+
+    // POS remains operational during an outage; when validated internet returns,
+    // replay locally saved sales and refresh the catalog without manual intervention.
+    LaunchedEffect(context.shop.id) {
+        while (true) {
+            delay(30_000)
+            if (loading || checkout || preparingCheckout || printing || syncingOffline) continue
+            if (!HybridConnectivity.hasInternet(androidContext)) {
+                offlineMode = true
+                continue
+            }
+            if (pendingCount > 0) {
+                runCatching { syncOfflineSales() }
+            }
+            if (offlineMode && pendingCount == 0) {
+                runCatching { refresh() }
+            }
+        }
     }
 
     LaunchedEffect(pendingPayMongo?.sessionId, paymongoRetryNonce) {
@@ -1021,7 +1066,11 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             },
             title = {
                 Text(
-                    if (lastSaleTraining) "Training Transaction Complete" else "Transaction Complete",
+                    when {
+                        lastSaleTraining -> "Training Transaction Complete"
+                        lastSaleOfflinePending -> "Saved Offline - Pending Sync"
+                        else -> "Transaction Complete"
+                    },
                     fontWeight = FontWeight.Black
                 )
             },
@@ -1034,6 +1083,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     Text(
                         if (lastSaleTraining)
                             "Practice checkout complete. No sale, payment, stock movement or report entry was created."
+                        else if (lastSaleOfflinePending)
+                            "Saved on this tablet. This is a provisional receipt; the sale will be finalized when cloud sync succeeds."
                         else
                             "Payment, retail pricing, and inventory were committed successfully."
                     )
@@ -1093,6 +1144,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 val clearCompletedSale = {
                     lastSale = null
                     lastSaleTraining = false
+                    lastSaleOfflinePending = false
                     lastReceiptCart = emptyList()
                     lastPayments = emptyList()
                     lastReceiptToken = null
