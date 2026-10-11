@@ -719,7 +719,10 @@ data class OfflineSalePayload(
     @SerialName("payment_method") val paymentMethod: String,
     @SerialName("reference_number") val referenceNumber: String? = null,
     val items: List<SaleRpcItem>,
-    val payments: List<CheckoutPayment> = emptyList()
+    val payments: List<CheckoutPayment> = emptyList(),
+    // Existing records default to the old v3 replay path. New retail sales
+    // replay through the SAME RPC and client key used by online checkout.
+    val checkoutBackend: String = "legacy_v3"
 )
 
 data class PendingOfflineSale(
