@@ -128,8 +128,38 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
         val database = writableDatabase
         database.beginTransaction()
         try {
-            enqueueSale(payload)
-            saveProducts(payload.shopId, products)
+            val alreadySaved = database.query(
+                "pending_sales", arrayOf("id"), "id=?",
+                arrayOf(payload.clientKey), null, null, null
+            ).use { it.moveToFirst() }
+            if (!alreadySaved) {
+                // Always re-read DB INSIDE transaction. UI snapshots can be stale
+                // when another coroutine saves a checkout at the same time.
+                val actual = loadProducts(payload.shopId).ifEmpty { products }
+                require(actual.isNotEmpty()) { "No cached stock; go online to load products." }
+                val grouped = payload.items.groupBy { it.productId }
+                    .mapValues { (_, lines) -> lines.sumOf { it.quantity } }
+                require(grouped.isNotEmpty() && payload.items.all {
+                    it.quantity.isFinite() && it.quantity > 0.0
+                }) { "Invalid quantity in sale." }
+                grouped.forEach { (id, quantity) ->
+                    val item = actual.firstOrNull { it.id == id }
+                        ?: error("Product not present in offline catalog.")
+                    require(item.isActive) { "Item is no longer active." }
+                    if (item.trackStock) require(item.stockQuantity + 0.000001 >= quantity) {
+                        "Not enough offline stock for " + item.name +
+                            ": only " + item.stockQuantity + " left."
+                    }
+                }
+                val adjusted = actual.map { p ->
+                    val sold = grouped[p.id] ?: 0.0
+                    if (p.trackStock && sold > 0.0) {
+                        p.copy(stockQuantity = (p.stockQuantity - sold).coerceAtLeast(0.0))
+                    } else p
+                }
+                enqueueSale(payload)
+                saveProducts(payload.shopId, adjusted)
+            }
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
