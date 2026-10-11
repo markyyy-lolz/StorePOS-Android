@@ -295,21 +295,6 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 val rp = async { RetailRepository.promos(context.shop.id) }
                 val rf = async { RetailRepository.favorites(context.shop.id) }
                 products = p.await()
-                // When this tablet has unsynced sales, show conservative stock
-                // counts even after a successful catalog download.
-                val outstandingQuantities = offlineStore.pendingSales()
-                    .filter { it.payload.shopId == context.shop.id }
-                    .flatMap { it.payload.items }
-                    .groupBy { it.productId }
-                    .mapValues { (_, lines) -> lines.sumOf { it.quantity } }
-                if (outstandingQuantities.isNotEmpty()) {
-                    products = products.map { product ->
-                        val reserved = outstandingQuantities[product.id] ?: 0.0
-                        if (product.trackStock && reserved > 0.0) {
-                            product.copy(stockQuantity = (product.stockQuantity - reserved).coerceAtLeast(0.0))
-                        } else product
-                    }
-                }
                 customers = c.await()
                 motorcycles = m.await()
                 settings = s.await()
@@ -319,7 +304,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 retailPromos = rp.await()
                 retailFavorites = rf.await()
             }
-            offlineStore.saveProducts(context.shop.id, products)
+            products = offlineStore.saveCloudProductsWithPending(context.shop.id, products)
             offlineStore.saveCustomers(context.shop.id, customers)
             offlineStore.saveMotorcycles(context.shop.id, motorcycles)
 
