@@ -538,13 +538,17 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     fun offlineCheckoutRestriction(
         soldCart: List<CartLine>,
         payments: List<CheckoutPayment>,
+        customerId: String?,
         managerPin: String?,
         charges: List<RetailCharge>,
         dueDate: String?
     ): String? = when {
         managerPin != null -> "Manager approvals require an online connection."
-        payments.any { it.method in setOf("paymongo", "credit", "store_credit") } ->
-            "Automated payments and customer credit require an online connection."
+        payments.any { it.method in setOf("paymongo", "credit") } ->
+            "PayMongo settlement and new customer debt require a verified online connection."
+        payments.any { it.method == "store_credit" } &&
+            (customerId == null || LanStockHub.load(androidContext, context.shop.id).mode == "off") ->
+            "Offline store-credit spending requires an existing customer and an active LAN Hub."
         charges.isNotEmpty() || dueDate != null || requiresRetailOnline(soldCart) ->
             "This advanced retail transaction requires online checkout."
         else -> null
@@ -600,6 +604,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             products = offlineStore.loadProducts(context.shop.id)
             if (hubMode == "client") {
                 products = offlineStore.applyLanStock(context.shop.id, authoritative)
+            }
+            if (payments.any { it.method == "store_credit" }) {
+                val credits = withContext(Dispatchers.IO) {
+                    LanStockHub.creditBalances(androidContext, context.shop.id)
+                }
+                customers = offlineStore.applyLanCreditBalances(context.shop.id, credits)
             }
             lanConnected = true
         } else {
@@ -693,6 +703,12 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 if (quantities.isNotEmpty() && (offlineMode ||
                         !HybridConnectivity.hasInternet(androidContext))) {
                     products = offlineStore.applyLanStock(context.shop.id, quantities)
+                    val credits = withContext(Dispatchers.IO) {
+                        runCatching { LanStockHub.creditBalances(androidContext, context.shop.id) }
+                    }.getOrNull()
+                    if (credits != null) {
+                        customers = offlineStore.applyLanCreditBalances(context.shop.id, credits)
+                    }
                 }
             }.onFailure {
                 lanConnected = false
@@ -1872,7 +1888,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         retrySaleSignature = signature
                     }
                     val restriction = offlineCheckoutRestriction(
-                        soldCart, payments, managerPin, charges, dueDate
+                        soldCart, payments, customerId, managerPin, charges, dueDate
                     )
                     if (offlineMode || !HybridConnectivity.hasInternet(androidContext)) {
                         if (restriction != null) {
