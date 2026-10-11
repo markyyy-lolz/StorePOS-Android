@@ -1,33 +1,32 @@
-# StorePOS Android v1.8.2 — Hybrid Offline Sales & Inventory
+# StorePOS Hybrid v1.9.0-beta.2 — Wi-Fi LAN inventory test build
 
-## What's new
-- **Completely offline cash checkout** using a durable device-local SQLite sale queue after the shop's product catalog has been synchronized at least once.
-- **Direct offline Bluetooth/USB thermal receipts** and local receipt PDFs from the same ESC/POS bytes; internet is not needed for a paired printer.
-- **Two-tablet independent sales** that upload their cash transactions separately to the same StorePOS Supabase shop when authenticated connectivity returns.
-- **Offline inventory**: add products, edit standard product details, restock/deduct stock, and barcode-assisted partial physical stocktaking with local queuing.
-- **Automatic reconnect synchronization** of inventory actions and cash sales, including background WorkManager scheduling and recovery from ambiguous network timeouts.
-- **Inventory collision safety**: immutable operation UUIDs, cloud catalog generations, server-locked stock movements, price/stocktake compare-and-set and manager-review quarantine for conflicting updates. Never silently overwrite another tablet's inventory or discard a receipt.
-- **Pending Sync & Needs Review** indicators in inventory; legacy/pre-reset outbox transactions are not uploaded against a new catalog automatically.
+**Internal test prerelease; not approved for live grocery registers yet.**
 
-## Prerequisites and limitations
-- Each Samsung tablet must log in and download its authorized shop catalog while online **before** going offline. Existing sessions, memberships and licensing rules still apply.
-- **Offline is cash-only.** Online PayMongo, QR payment verification, server-backed pricing, cloud print queues, complex serial/batch/weighed stock and product deletion require internet.
-- Stock adjustments made on independent tablets can conflict. If they do, the conflicting item remains queued for manager review; in particular an absolute physical stocktake cannot blindly overwrite sales from another device.
-- Directly paired Bluetooth/USB printing works without internet; one shared cloud-connected printer does not.
-- **Do not uninstall or clear StorePOS app data** while unsynced transactions or inventory changes remain on the tablet. Back up first.
-- Not every offline sale is guaranteed to auto-accept into cloud stock; mismatched catalog/price/permissions, overselling and stocktake conflicts require manual reconciliation.
+This version is based on the **published v1.8.2 branch**, not the outdated main branch. Existing SQLite v4 database migrations, trusted catalog epoch protections, original cash-only hybrid replay, offline printed receipt archive, background sales/inventory synchronization and related tests are retained.
 
-## Upgrade notes
-- Android package `com.storepos.app`, `versionCode 31`.
-- Local SQLite migration adds an inventory operation journal without deleting cached receipts or pending cash sales.
-- StorePOS-specific additive Supabase migrations are installed in project `qgyzdoltjlryjthxxscw`. No prior sales, payments, stock movements, products or receipts were deleted.
-- If you install over v1.7.4, make sure Android confirms the APK signature matches your currently installed StorePOS. Do not uninstall and reinstall to bypass a signature error; that risks losing unsynced on-device data.
-- The StorePOS app and the optional terminal launcher have separate APKs and update paths.
+## Added
+- Settings → **Offline LAN Hub**: configure Host Tablet or Second Tablet with a securely generated pairing key, local IPv4 address, and Test LAN Inventory Connection.
+- Two Samsung tablets can connect over one trusted Wi-Fi router or hotspot **without internet**. The host holds an authoritative local stock queue and serializes offline **cash** sale acceptance so the same last unit is not sold twice through the reachable host.
+- LAN cash sale request includes the existing original cashier ID, trusted catalog epoch, and exact printed receipt bytes, and is saved atomically by the host. The second tablet archives a local copy as already supported by StorePOS v1.8.2.
+- Stock snapshot is refreshed from the host while the POS is open. Offline checkout does not silently bypass a configured host when a connection fails.
+- Settings → Offline Database Storage displays the real internal DB path, size and pending count; admin can export a consistent SQLite snapshot using Android Save As.
+- Devices previously validated and signed in may boot during their cached license's allowed offline grace window; new unverified devices cannot activate offline.
+- Internal update versionName 1.9.0-beta.2 / versionCode 33 (previous published stable v1.8.2 / versionCode 31).
 
-## Verification and rollout
-- GitHub Android unit tests, lint, and debug APK compilation passed on v1.8.2 RC1.
-- **Physical end-to-end testing on two Samsung tablets, direct receipt printer, power-cycle/outage recovery and concurrent stock conflicts has NOT been completed by this release process.**
-- Start with one test tablet and test shop. Check cloud sale/receipt accuracy, local printing, and queued operation reconciliation before upgrading active grocery checkout terminals.
-- Not a certified fiscal receipt guarantee. Follow applicable PH receipt and tax compliance rules.
+## Setup
+1. Connect **both tablets to the same Wi-Fi LAN**, disable client/AP isolation on the router.
+2. On host tablet: Settings → Offline LAN Hub → Host Tablet, generate pairing key, save, note the IPv4 address.
+3. On second tablet: Settings → Offline LAN Hub → Second Tablet; enter that IPv4 and exact key, save, run Test LAN Inventory Connection.
+4. Test internet-off Wi-Fi-on basic cash sale with 1 stock item on two tablets. Only one checkout should be approved while the host is reachable. Verify original receipt print, PDF, pending sync, and cloud replay.
+5. Test host power-off, Wi-Fi disconnection, cloud recovery, old SQLite database upgrade, receipt reprints, and app restart before using a live register.
 
-Prepared by Azurate Software Solutions.
+## Boundaries
+- The two tablets **must still communicate locally** for shared stock to be guaranteed. Fully isolated tablets can only maintain independent offline queues and cannot guarantee real-time inventory.
+- Offline **cash only** stays aligned with StorePOS v1.8.2 and its trusted cloud reconciliation RPC. PayMongo QR/online card settlements, new credit debt, store-credit spending, manager approval, weighed/batch/serial/pack complex pricing and promotions need online verification. Never mark unverified electronic payments as paid.
+- Supabase cloud sales may require manager reconciliation after a catalog reset/stock conflict; the local original sale/receipt is preserved rather than silently dropped.
+- Pairing request/response is authenticated over LAN, but transport is **not encrypted**; use a trusted router with no port forwarding.
+- A physical printer and two-tablet device test is still required. A passing automated build is NOT proof of inventory/payment reconciliation under all outages.
+
+**Do not install v1.9.0-beta.1**: it was generated from stale main with SQLite v2 and must not be used as an update over v1.8.2. Beta.2 uses the correct schema v4 lineage.
+
+No existing shop data was reset or deleted, and no production Supabase tables were changed by this release.
