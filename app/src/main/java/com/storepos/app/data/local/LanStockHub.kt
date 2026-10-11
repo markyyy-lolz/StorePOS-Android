@@ -161,6 +161,18 @@ object LanStockHub {
         }
     }
 
+    fun creditBalances(context: Context, shopId: String): Map<String, Double> {
+        val config = load(context, shopId)
+        return when (config.mode) {
+            "host" -> {
+                val local = OfflineStore(context)
+                try { local.lanCreditBalances(shopId) } finally { local.close() }
+            }
+            "client" -> exchange(config, shopId, "credit_balances", "")
+            else -> emptyMap()
+        }
+    }
+
     private fun exchange(
         config: LanHubConfig,
         shopId: String,
@@ -217,7 +229,7 @@ object LanStockHub {
                 val body = request["body"]?.jsonPrimitive?.content.orEmpty()
                 val claimedMac = request["mac"]?.jsonPrimitive?.content.orEmpty()
                 require(claimedShop == shopId && nonce.length in 20..64)
-                require(action == "stock" || action == "reserve")
+                require(action in setOf("stock", "reserve", "credit_balances"))
                 val millis = epoch.toLongOrNull() ?: error("Invalid LAN request timestamp")
                 require(kotlin.math.abs(System.currentTimeMillis() - millis) <= 120_000L) {
                     "Check that both tablet clocks use automatic time."
@@ -229,6 +241,7 @@ object LanStockHub {
                 val result = try {
                     when (action) {
                         "stock" -> store.loadProducts(shopId).associate { it.id to it.stockQuantity }
+                        "credit_balances" -> store.lanCreditBalances(shopId)
                         "reserve" -> {
                             val bytes = Base64.decode(body, Base64.DEFAULT)
                             val sale = json.decodeFromString<OfflineSalePayload>(String(bytes, Charsets.UTF_8))
