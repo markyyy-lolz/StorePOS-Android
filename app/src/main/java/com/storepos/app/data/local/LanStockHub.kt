@@ -63,7 +63,7 @@ object LanStockHub {
             "A 32+ character random LAN pairing key is required."
         }
         if (config.mode == "client") require(config.host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")) &&
-            config.host.split('.').all { it.toIntOrNull() in 0..255 }) {
+            config.host.split('.').all { segment -> segment.toIntOrNull()?.let { it in 0..255 } == true }) {
             "Enter the host's Wi-Fi IPv4 address."
         }
         check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -149,6 +149,9 @@ object LanStockHub {
         val config = load(context, shopId)
         return when (config.mode) {
             "host" -> {
+                check(server?.isClosed == false && currentShop == shopId) {
+                    "LAN Hub service is not running."
+                }
                 val local = OfflineStore(context)
                 try { local.loadProducts(shopId).associate { it.id to it.stockQuantity } }
                 finally { local.close() }
@@ -202,6 +205,7 @@ object LanStockHub {
         secret: String
     ) {
         socket.use { connection ->
+            var authenticatedNonce: String? = null
             try {
                 connection.soTimeout = 5500
                 if (boundServer.isClosed || currentShop != shopId) return
@@ -220,6 +224,7 @@ object LanStockHub {
                 }
                 val expected = sign(secret, listOf(shopId, action, nonce, epoch, body).joinToString("\n"))
                 require(secureEquals(claimedMac, expected)) { "LAN pairing key mismatch." }
+                authenticatedNonce = nonce
                 val store = OfflineStore(context)
                 val result = try {
                     when (action) {
@@ -237,10 +242,8 @@ object LanStockHub {
             } catch (e: Exception) {
                 // Never echo app credentials or raw data in an exception.
                 val message = (e.message ?: "LAN request failed").take(180)
-                runCatching {
-                    // Unauthenticated requests receive no signed response.
-                    // Authorized clients get a user-visible timeout/retry message.
-                    sendReply(connection, secret, "", false, message)
+                authenticatedNonce?.let { nonce ->
+                    runCatching { sendReply(connection, secret, nonce, false, message) }
                 }
             }
         }
