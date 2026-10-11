@@ -110,6 +110,12 @@ fun SettingsPage(context: ShopContext) {
             }
         }
 
+        // Only the owner or admin can view/export offline shop data.
+        // Keep this immediately below cloud status so users can find it.
+        if (canAdmin) {
+            OfflineDatabaseSettingsCard(context.shop.id)
+        }
+
         MotoCard(Modifier.fillMaxWidth()) {
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Icon(Icons.Rounded.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary)
