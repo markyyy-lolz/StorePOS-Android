@@ -135,3 +135,15 @@ jobs:
               --title "StorePOS $RELEASE_NAME" \
               --notes-file RELEASE_NOTES.md
           fi
+          # Multiple push events can queue builds for this release branch.
+          # The latest completed run must keep its signed APK and tag in sync.
+          gh release edit "$RELEASE_NAME" \
+            --title "StorePOS $RELEASE_NAME" \
+            --notes-file RELEASE_NOTES.md
+          gh api -X PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_NAME}" \
+            -f sha="$GITHUB_SHA" -F force=true
+          actual_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_NAME}" \
+            --jq '.object.sha')"
+          test "$actual_tag_sha" = "$GITHUB_SHA"
+          echo "Verified published tag and signed APK source: $GITHUB_SHA"
