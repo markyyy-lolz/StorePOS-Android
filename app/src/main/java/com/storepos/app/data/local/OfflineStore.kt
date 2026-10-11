@@ -120,6 +120,33 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
     fun saveCustomers(shopId: String, customers: List<Customer>) =
         putBlob("customers:$shopId", json.encodeToString(customers))
 
+    /** Protect shared customer credit when a cloud refresh races a LAN sale. */
+    fun saveCloudCustomersWithPending(shopId: String, remote: List<Customer>): List<Customer> {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val pendingCredit = pendingSales().filter { it.payload.shopId == shopId }
+                .filter { it.payload.customerId != null }
+                .groupBy { it.payload.customerId!! }
+                .mapValues { (_, rows) ->
+                    rows.sumOf { row ->
+                        row.payload.payments.filter { it.method == "store_credit" }.sumOf { it.amount }
+                    }
+                }
+            val adjusted = remote.map { customer ->
+                val held = pendingCredit[customer.id] ?: 0.0
+                if (held > 0) customer.copy(
+                    storeCreditBalance = (customer.storeCreditBalance - held).coerceAtLeast(0.0)
+                ) else customer
+            }
+            saveCustomers(shopId, adjusted)
+            database.setTransactionSuccessful()
+            return adjusted
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun loadCustomers(shopId: String): List<Customer> =
         getBlob("customers:$shopId")?.let {
             runCatching { json.decodeFromString<List<Customer>>(it) }.getOrDefault(emptyList())
