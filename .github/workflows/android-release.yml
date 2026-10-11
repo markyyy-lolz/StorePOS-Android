@@ -112,3 +112,9 @@ jobs:
               --title "StorePOS $RELEASE_NAME" \
               --notes-file RELEASE_NOTES.md
           fi
+          # Release metadata must match the exact APK-producing commit.
+          gh release edit "$RELEASE_NAME" --title "StorePOS $RELEASE_NAME" --notes-file RELEASE_NOTES.md
+          # This is an internal prerelease channel: align its lightweight tag to
+          # the verified source commit, not an earlier queued CI event.
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_NAME}" \
+            -f sha="$GITHUB_SHA" -F force=true
