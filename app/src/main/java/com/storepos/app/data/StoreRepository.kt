@@ -1086,6 +1086,29 @@ object StoreRepository {
 
 
     suspend fun completeOfflineSale(payload: OfflineSalePayload): Sale {
+        if (payload.checkoutBackend == "retail") {
+            val reconstructedCart = payload.items.map { item ->
+                CartLine(
+                    product = Product(
+                        id = item.productId,
+                        shopId = payload.shopId,
+                        sku = item.productId,
+                        name = item.productId,
+                        sellingPrice = item.unitPrice ?: 0.0
+                    ),
+                    quantity = item.quantity,
+                    unitPriceOverride = item.unitPrice
+                )
+            }
+            return RetailRepository.checkout(
+                shopId = payload.shopId,
+                cart = reconstructedCart,
+                customerId = payload.customerId,
+                discount = payload.discountAmount,
+                payments = payload.payments,
+                clientKey = payload.clientKey
+            ).sale
+        }
         if (payload.payments.isEmpty()) {
             return client.postgrest.rpc(
                 function = "complete_sale_transaction_v2",
