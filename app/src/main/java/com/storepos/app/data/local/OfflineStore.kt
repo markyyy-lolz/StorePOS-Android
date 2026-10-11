@@ -90,6 +90,33 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             runCatching { json.decodeFromString<List<Product>>(it) }.getOrDefault(emptyList())
         } ?: emptyList()
 
+    /**
+     * Reconcile a newly downloaded cloud catalog WITH any still-pending local
+     * sales under one write lock. This prevents cloud refresh from clobbering
+     * an offline LAN sale which arrived during the network request.
+     */
+    fun saveCloudProductsWithPending(shopId: String, remote: List<Product>): List<Product> {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val reserved = pendingSales().filter { it.payload.shopId == shopId }
+                .flatMap { it.payload.items }
+                .groupBy { it.productId }
+                .mapValues { (_, lines) -> lines.sumOf { it.quantity } }
+            val adjusted = remote.map { item ->
+                val quantity = reserved[item.id] ?: 0.0
+                if (quantity > 0 && item.trackStock) item.copy(
+                    stockQuantity = (item.stockQuantity - quantity).coerceAtLeast(0.0)
+                ) else item
+            }
+            saveProducts(shopId, adjusted)
+            database.setTransactionSuccessful()
+            return adjusted
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun saveCustomers(shopId: String, customers: List<Customer>) =
         putBlob("customers:$shopId", json.encodeToString(customers))
 
