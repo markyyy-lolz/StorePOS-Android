@@ -1,0 +1,26 @@
+name: StorePOS Data Health UI Validation
+
+on:
+  push:
+    branches:
+      - "fix/stable-data-health-readable-v183"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Data health unit tests, Android lint and APK compile
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
