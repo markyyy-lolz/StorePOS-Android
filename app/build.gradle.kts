@@ -43,6 +43,7 @@ android {
         applicationId = "com.storepos.app"
         minSdk = 26
         targetSdk = 36
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 36
         versionName = "1.8.4"
 
@@ -94,6 +95,8 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
