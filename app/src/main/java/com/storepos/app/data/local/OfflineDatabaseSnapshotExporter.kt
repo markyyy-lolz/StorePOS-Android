@@ -61,7 +61,7 @@ internal object OfflineDatabaseSnapshotExporter {
         }
     }
 
-    private fun snapshotToFile(
+    internal fun snapshotToFile(
         live: SQLiteDatabase,
         stage: File,
         version: Int
@@ -136,7 +136,7 @@ internal object OfflineDatabaseSnapshotExporter {
         return values
     }
 
-    private fun verify(
+    internal fun verify(
         file: File,
         version: Int,
         expected: Map<String, Long>
