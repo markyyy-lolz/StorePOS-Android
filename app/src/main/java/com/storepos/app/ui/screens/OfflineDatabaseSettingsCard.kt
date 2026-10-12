@@ -1,7 +1,6 @@
 package com.storepos.app.ui.screens
 
 import android.content.Context
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -17,11 +16,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.OfflineDatabaseSnapshotExporter
 import com.storepos.app.ui.components.MotoCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -72,11 +71,13 @@ fun OfflineDatabaseSettingsCard(shopId: String) {
             backupMessage = null
             scope.launch {
                 val result = withContext(Dispatchers.IO) {
-                    runCatching { exportConsistentDatabaseSnapshot(appContext, uri) }
+                    runCatching { OfflineDatabaseSnapshotExporter.export(appContext, uri) }
                 }
-                result.onSuccess {
+                result.onSuccess { receipt ->
                     backupFailed = false
-                    backupMessage = "Local database backup saved to your chosen folder."
+                    backupMessage = "Backup saved and verified: " +
+                        (receipt.bytes / 1024) + " KB, " + receipt.tables +
+                        " tables. SHA-256: " + receipt.sha256.take(12) + "…"
                 }.onFailure {
                     backupFailed = true
                     backupMessage = "Backup failed: " +
@@ -150,7 +151,7 @@ fun OfflineDatabaseSettingsCard(shopId: String) {
             )
         }
         Text(
-            "This backup may contain private sales and customer data. Store it securely. " +
+            "This verified backup may contain private sales and customer data. Store it securely. " +
                 "It does not change the live database or sync status. " +
                 "Cloud shop backups are managed separately.",
             style = MaterialTheme.typography.bodySmall,
@@ -159,27 +160,3 @@ fun OfflineDatabaseSettingsCard(shopId: String) {
     }
 }
 
-/**
- * SQLite VACUUM INTO creates a consistent snapshot, including any committed WAL data.
- * Fail rather than falling back to copying the raw live file on older SQLite versions.
- */
-private fun exportConsistentDatabaseSnapshot(context: Context, destination: Uri) {
-    val local = OfflineStore(context)
-    val temporary = File(context.cacheDir, "storepos-offline-snapshot-" + System.nanoTime() + ".db")
-    try {
-        val sqlPath = temporary.absolutePath.replace("'", "''")
-        local.writableDatabase.execSQL("VACUUM INTO '$sqlPath'")
-        check(temporary.isFile && temporary.length() > 0) {
-            "SQLite snapshot is empty. No backup was saved."
-        }
-        val copied = context.contentResolver.openOutputStream(destination, "w")?.use { output ->
-            temporary.inputStream().use { input -> input.copyTo(output) }
-        } ?: error("Cannot write to the selected folder.")
-        check(copied.toLong() == temporary.length()) {
-            "Incomplete file copy. Delete the partial backup and try again."
-        }
-    } finally {
-        local.close()
-        temporary.delete()
-    }
-}
