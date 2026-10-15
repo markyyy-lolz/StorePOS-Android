@@ -146,7 +146,7 @@ fun PrinterSettingsCard(context: ShopContext) {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "Blank paper after Powered by StorePOS, before the automatic full cut.",
+                    "Blank paper after the Azurate technical support contact, before the automatic full cut.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
