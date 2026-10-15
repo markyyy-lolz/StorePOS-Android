@@ -21,6 +21,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.storepos.app.data.model.Shop
 import com.storepos.app.data.model.ShopSettings
+import com.storepos.app.printing.PosSupplierFooter
 
 private val receiptEditableSections = listOf("meta", "items", "totals", "payment", "tax", "digital")
 
@@ -364,7 +365,7 @@ private fun ReceiptDesignerControls(
         HorizontalDivider()
         Text("Section order", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Text(
-            "Store identity is pinned at the top and Powered by StorePOS is pinned at the bottom.",
+            "Store identity stays at the top. Azurate software supplier and support contact stay at the bottom.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -511,8 +512,7 @@ private fun ReceiptDesignerPreview(
             add(center("Please come again."))
         }
         add(thin)
-        add(center("Powered by StorePOS"))
-        add(center("Retail Management & POS System"))
+        addAll(PosSupplierFooter.centeredLines(chars))
     }
 
     Card(
