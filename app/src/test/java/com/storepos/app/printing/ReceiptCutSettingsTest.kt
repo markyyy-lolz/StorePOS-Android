@@ -23,15 +23,8 @@ class ReceiptCutSettingsTest {
         name = "Test product", sku = "P-100", sellingPrice = 39.0)
 
     private fun assertFooterGap(receipt: ByteArray, extraLines: Int) {
-        // Sales receipts include one additional tagline below the Powered by line.
-        // The cutter must be after the *last* printable footer line.
-        val output = String(receipt, Charsets.US_ASCII)
-        val lastFooter = if (output.contains("Retail Management & POS System\n")) {
-            "Retail Management & POS System\n"
-        } else {
-            "Powered by StorePOS\n"
-        }
-        val needle = lastFooter.toByteArray(Charsets.US_ASCII)
+        // Hardware cutter must follow the final printed supplier contact.
+        val needle = (PosSupplierFooter.PHONE + "\n").toByteArray(Charsets.US_ASCII)
         val footerIndex = receipt.indices.firstOrNull { start ->
             start + needle.size <= receipt.size &&
                 receipt.copyOfRange(start, start + needle.size).contentEquals(needle)
@@ -79,6 +72,29 @@ class ReceiptCutSettingsTest {
         }
     }
 
+    @Test fun supplierContactVisibleOnBothReceiptWidths() {
+        for (paperWidth in listOf(58, 80)) {
+            val printed = String(
+                BluetoothReceiptPrinter.saleReceipt(
+                    shop.name, sale, listOf(CartLine(product, 1.0)),
+                    paperWidth = paperWidth
+                ),
+                Charsets.US_ASCII
+            )
+            assertTrue(printed.contains(PosSupplierFooter.NAME))
+            assertTrue(printed.contains(PosSupplierFooter.PHONE))
+            assertFalse(printed.contains("Powered by StorePOS"))
+            if (paperWidth == 58) {
+                assertTrue(printed.contains("PULO SAN ROQUE,"))
+                assertTrue(printed.contains("PAOMBONG, BULACAN"))
+            } else {
+                assertTrue(printed.contains(PosSupplierFooter.ADDRESS))
+            }
+            val lineWidth = if (paperWidth == 58) 32 else 48
+            assertTrue(PosSupplierFooter.centeredLines(lineWidth).all { it.length <= lineWidth })
+        }
+    }
+
     @Test fun xReportFooterGapMatchesReceipt() {
         val report = buildJsonObject {
             put("cash_sales", 39.0)
@@ -96,8 +112,8 @@ class ReceiptCutSettingsTest {
             listOf(CartLine(product, 1.0)), footerFeedLines = 0)
         val b = BluetoothReceiptPrinter.saleReceipt(shop.name, sale,
             listOf(CartLine(product, 1.0)), footerFeedLines = 8)
-        val outputA = String(a, Charsets.US_ASCII).substringBefore("Powered by StorePOS")
-        val outputB = String(b, Charsets.US_ASCII).substringBefore("Powered by StorePOS")
+        val outputA = String(a, Charsets.US_ASCII).substringBefore("POS SYSTEM SUPPLIED")
+        val outputB = String(b, Charsets.US_ASCII).substringBefore("POS SYSTEM SUPPLIED")
         assertEquals(outputA, outputB)
         assertTrue(outputA.contains("39.00"))
         assertFalse(ReceiptCutSettings.extraFeedAndFullCut(0).contentEquals(

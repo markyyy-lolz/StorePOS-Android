@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 37
-        versionName = "1.8.5"
+        versionCode = 38
+        versionName = "1.8.6"
 
         buildConfigField("String", "SUPABASE_URL", quotedLocalProperty("SUPABASE_URL"))
         buildConfigField(

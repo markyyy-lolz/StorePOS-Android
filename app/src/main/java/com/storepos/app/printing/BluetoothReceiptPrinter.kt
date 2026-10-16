@@ -237,8 +237,7 @@ class BluetoothReceiptPrinter(
                     add(center("Please come again.", width))
                 }
                 add(thin)
-                add(center("Powered by StorePOS", width))
-                add(center("Retail Management & POS System", width))
+                addAll(PosSupplierFooter.centeredLines(width))
             }
 
             val editable = listOf("meta", "items", "totals", "payment", "tax", "digital")
@@ -277,8 +276,8 @@ class BluetoothReceiptPrinter(
                 }
             }
 
-            // Only extra space between the final "Powered by StorePOS" line
-            // and the hardware cutter is adjustable. The cutter remains full.
+            // Keep the adjustable gap after the final supplier contact line.
+            // The hardware cutter remains full.
             out.write(ReceiptCutSettings.extraFeedAndFullCut(footerFeedLines))
             return out.toByteArray()
         }
@@ -327,7 +326,7 @@ class BluetoothReceiptPrinter(
             lines += "Paper width: ${paperWidth}mm"
             lines += "Status: OK"
             lines += "-".repeat(width)
-            lines += center("Powered by StorePOS", width)
+            lines += PosSupplierFooter.centeredLines(width)
             val body = lines.joinToString("\n", postfix = "\n").toByteArray(charset)
 
             val init = byteArrayOf(0x1B, 0x40)

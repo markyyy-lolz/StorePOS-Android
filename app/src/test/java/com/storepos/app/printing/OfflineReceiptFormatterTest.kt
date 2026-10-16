@@ -47,7 +47,9 @@ class OfflineReceiptFormatterTest {
         assertTrue(text.contains("NOT POSTED TO STOREPOS CLOUD"))
         assertTrue(text.contains("PENDING SYNC"))
         assertTrue(text.contains("39.00"))
-        assertTrue(text.contains("Powered by StorePOS"))
+        assertTrue(text.contains(PosSupplierFooter.NAME))
+        assertTrue(text.contains(PosSupplierFooter.PHONE))
+        assertFalse(text.contains("Powered by StorePOS"))
         assertFalse(text.contains("S-2026-"))
         assertFalse(text.contains("https://"))
         assertEquals("pending_sync", receipt.sale.status)
@@ -66,7 +68,9 @@ class OfflineReceiptFormatterTest {
                 "cashier", cart, cash, discount=0.0,tax=0.0,paperWidth=paperWidth,
                 cashierLabel=null
             )
-            assertTrue(String(result.thermalBytes, Charsets.ISO_8859_1).contains("OFFLINE CASH RECEIPT"))
+            val printedText = String(result.thermalBytes, Charsets.ISO_8859_1)
+            assertTrue(printedText.contains("OFFLINE CASH RECEIPT"))
+            assertTrue(printedText.contains(PosSupplierFooter.PHONE))
         }
     }
 

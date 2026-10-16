@@ -101,7 +101,7 @@ StorePOS does not expose MotoPOS motorcycle service/job modules in its retail pl
 - Per-shop receipt title, header, footer, visibility toggles and section ordering.
 - Receipt design applies to ESC/POS printing and StorePOS digital receipts.
 - Digital receipt QR can be enabled or disabled per shop.
-- Store identity stays first and Powered by StorePOS stays at the bottom.
+- Store identity stays first; the Azurate software supplier address and support phone are fixed at the bottom of newly generated thermal/PDF receipts.
 - Proper Android adaptive launcher icon fixes generic placeholder icons on tablets and POS terminals.
 
 

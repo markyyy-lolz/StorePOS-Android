@@ -64,7 +64,7 @@ object ThermalReportFormatter {
         lines += pair("Transactions",report.amount("transaction_count").toInt().toString())
         lines += divider
         lines += "LIVE READING - DOES NOT CLOSE SHIFT"
-        lines += "Powered by StorePOS"
+        lines += PosSupplierFooter.centeredLines(width)
         return bytes(lines,footerFeedLines)
     }
 
@@ -107,7 +107,7 @@ object ThermalReportFormatter {
         }
         lines += divider
         lines += "CLOSED SHIFT - HISTORICAL SNAPSHOT"
-        lines += "Powered by StorePOS"
+        lines += PosSupplierFooter.centeredLines(width)
         return bytes(lines,footerFeedLines)
     }
 }
