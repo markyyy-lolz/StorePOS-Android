@@ -1,42 +1,30 @@
-# StorePOS Windows v1.0.0 · Modern Desktop POS
+# StorePOS Windows — native WPF desktop client
 
-Native C# / .NET 10 WPF Windows 10/11 x64 application in the existing StorePOS GitHub repository. Its source is isolated under windows/ and the installer is built by GitHub Actions on windows-latest.
+StorePOS Windows is a **real C#/.NET 10 WPF app for Windows 10/11 x64**. It is NOT a Python program, browser-only wrapper or Electron application.
 
-## Architecture
-- Backend: existing StorePOS Supabase project qgyzdoltjlryjthxxscw (NOT the BrewPOS DB). Only memberships with app_code=storepos are accepted.
-- Auth: Supabase Auth email/password with a regular staff JWT (never a service-role key), and embedded Microsoft Edge WebView2 loading the SAME hosted StorePOS Turnstile URL/callback as Android. The actual production sign-in remains unverified until a real staff account and Cloudflare challenge are tested on Windows. WebView2 Runtime must be present.
-- Licensing: existing validate_device_access and activate_device_access RPCs, bound to a stable per-installation Windows device UUID. Offline grace and actual expiry checked against cached server verification; reject clock rollback.
-- Offline storage: SQLite WAL in %LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3. The Windows installer never deletes this database.
-- Cash: each sale, immutable UUID, receipt, cashier identity, stock decrement and retryable outbox entry commit as one local transaction. Sync uses storepos_hybrid_reconcile_sale. Only basic cash sales are allowed offline.
-- Inventory: locally create, edit, adjust (+/-) or count simple products, saving to the same local outbox. Sync uses storepos_reconcile_inventory, with idempotency, role, epoch and stock conflict checks.
-- Reconnect: a failed upload retains the original UUID. Business conflicts are marked review (no destructive auto-overwrite). Every action is uploaded as its original authenticated employee.
-- Printer: locally installed Windows USB/Bluetooth ESC/POS RAW spooler; provisional receipts may be reprinted offline. A print error does not reverse a successfully saved sale.
+## Current build
+- **v1.0.2-preview.1** (developer preview, not fully feature-parity certified)
+- GitHub Actions: `.github/workflows/windows-build.yml`.
+- Creates a portable self-contained `StorePOS.Windows.exe` and per-user Inno Setup installer `StorePOS-Windows-v1.0.2-Setup.exe`.
+- Download the prerelease from the repository GitHub Releases page after the build succeeds.
 
-## Build and installer
-- Workflow: .github/workflows/windows-build.yml
-- SDK: .NET 10 and Windows build runner.
-- Publish output: windows/publish/StorePOS.Windows.exe, self-contained win-x64.
-- Inno Setup script: windows/installer/StorePOS.iss
-- Installer artifact: StorePOS-Windows-v1.0.0-Setup.exe, per-user installation (no elevation).
-- After a successful GitHub Actions run, download the Installer artifact from the workflow run's Artifacts section.
+## Current features
+Native cashier UI with barcode scanning, unknown-barcode manager Quick Add, customer cash tender/change, offline SQLite WAL receipts and stock deductions, queued cloud reconciliation, shop-scoped Supabase authentication, device licensing, stock movements/physical count, conflict review, Windows USB/Bluetooth RAW ESC/POS receipt printing, original receipt PDF export, and verified local database snapshot backup.
 
-## Production rollout checklist (NOT yet completed)
-1. Verify recoverable production backup; preserve all existing Android StorePOS data.
-2. TEST first login and CAPTCHA challenge on Windows with approved hosted Turnstile flow.
-3. Validate StorePOS membership and available device license seat on a non-production account.
-4. Download a trusted catalog once; disconnect internet; sell a simple cash product; restart and confirm queue and provisional receipt survive.
-5. Print with a real installed USB/Bluetooth 58mm or 80mm printer. Verify codepage, paper-width, and cutter.
-6. Reconnect as the original cashier and verify cloud sale/items/payments, retail receipt details and stock movement exactly once.
-7. On Android Tablet B and Windows PC, try two concurrent offline sales for the last stock unit; confirm the rejected one is Needs Review.
-8. Restock/edit/count offline; reconnect and test manager approval of a conflicting stocktake without rewriting unrelated cloud stock.
-9. Check that offline licenses expire correctly; local device clock rollback is blocked.
-10. Do not deploy this unverified Windows candidate to live grocery cashiers until all tests pass.
+Prints the POS provider contact footer at the bottom of new receipts:
+**AZURATE SOFTWARE SOLUTION · PULO SAN ROQUE, PAOMBONG, BULACAN · 09241134301**.
 
-## Deliberate v1 limitations
-- No embedded Cloudflare Turnstile CAPTCHA token bridge yet; some production logins will be blocked until implemented.
-- No automatic Windows updater, publisher code-signing certificate, branch switcher, or advanced retail packs/promotions offline.
-- Manager-review conflicts must be resolved manually; the app never silently forces stock adjustments.
-- No claim that offline provisional receipts are officially BIR-compliant fiscal documents.
-- No local LAN replication among tablets and PCs while all devices are disconnected; they sync independently when internet returns.
+## Database architecture
+- Cloud: **existing StorePOS Supabase** `qgyzdoltjlryjthxxscw`, using staff JWTs and StorePOS shop-scoped RPCs. No service-role key is shipped.
+- Offline: **per-Windows-PC SQLite** at `%LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3`.
+- Sync uses idempotent operation UUIDs, shop epoch, actor identity and manager-review status on business conflicts.
+- Cloud catalog overwrite is blocked while unsynced local operations exist.
+- Cash-only offline; no shared last-item inventory guarantee when two devices cannot communicate.
 
-Azurate Software Solutions — StorePOS Windows.
+## Important limitations
+Android v1.8.6 **full parity is not complete**. See `windows/RELEASE_NOTES.md` for exact gaps.
+- Cloudflare Turnstile-to-Windows login not field-verified.
+- PDF, Bluetooth/USB Windows spooler, device seat, and actual cloud reconciliation must be tested with physical equipment.
+- No commercial Windows publisher code-signing cert; Microsoft SmartScreen may warn.
+- No proven fiscal/BIR receipt compliance. All offline receipts show provisional status.
+- Never uninstall the installed StorePOS version or clear local SQLite if pending sales exist.
