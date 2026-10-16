@@ -27,7 +27,7 @@
                     </Border>
                     <StackPanel Margin="10,1,0,0" VerticalAlignment="Center">
                         <TextBlock Text="StorePOS" FontSize="20" FontWeight="Bold" Foreground="#172338"/>
-                        <TextBlock Text="WINDOWS • v1.0.1" FontSize="10" FontWeight="SemiBold"
+                        <TextBlock Text="WINDOWS • v1.0.2 PREVIEW" FontSize="10" FontWeight="SemiBold"
                                    Foreground="#71839B"/>
                     </StackPanel>
                 </StackPanel>
@@ -211,7 +211,7 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="Select a row, then Add • Barcode + Enter for quick checkout"
+                                        <TextBlock Text="Scan barcode + Enter to add • Unknown barcode opens manager Quick Add"
                                                    Foreground="#93A2B5" FontSize="11"/>
                                         <TextBlock Grid.Column="1" Text="LOCAL CATALOG" Foreground="#95A3B4"
                                                    FontSize="10" FontWeight="SemiBold"/>
@@ -399,6 +399,13 @@
                                         <TextBox x:Name="PriceInput" Width="92" ToolTip="Selling price"/>
                                         <TextBox x:Name="OpeningInput" Width="87" ToolTip="Opening stock"/>
                                     </WrapPanel>
+                                     <WrapPanel Margin="0,8,0,0">
+                                         <TextBox x:Name="BarcodeInput" Width="178" ToolTip="Barcode (scanned or typed)"/>
+                                         <TextBox x:Name="CostInput" Width="95" ToolTip="Cost price, e.g. 35.00"/>
+                                         <TextBox x:Name="UnitInput" Width="75" Text="pc" ToolTip="Unit (pc, box, bottle)"/>
+                                         <TextBlock Text="New items queue safely to cloud" FontSize="10"
+                                                    Foreground="#6E819A" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                     </WrapPanel>
                                     <WrapPanel Margin="0,7,0,0">
                                         <Button Content="+ Add product" Click="AddProduct_Click"/>
                                         <Button Content="Edit selected" Click="EditProduct_Click"
@@ -432,6 +439,8 @@
                                 <Button Content="↻  Sync pending" Click="SyncNow_Click"/>
                                 <Button Content="▤  Reprint selected" Click="Reprint_Click"
                                         Style="{StaticResource OutlineButton}"/>
+                                         <Button Content="PDF  Save receipt" Click="SaveReceiptPdf_Click"
+                                                 Style="{StaticResource GhostButton}"/>
                             </StackPanel>
                         </Grid>
                         <Border Grid.Row="2" Background="White" BorderBrush="#E1E7EF"
@@ -506,7 +515,17 @@
                                             HorizontalAlignment="Left"/>
                                 </StackPanel>
                             </Border>
-                            <Button Content="Sign out (keep local unsynced records)" Click="SignOut_Click"
+                            <Border Background="White" CornerRadius="13" BorderBrush="#E1E7EF"
+                                     BorderThickness="1" Padding="23" Margin="0,0,0,15">
+                                 <StackPanel>
+                                     <TextBlock Text="Offline database backup" FontSize="17" FontWeight="Bold"/>
+                                     <TextBlock Text="Export verified SQLite snapshot. Does not delete or reset local sales, receipts or sync queue."
+                                                FontSize="12" Foreground="#8393A7" Margin="0,6,0,12" TextWrapping="Wrap"/>
+                                     <Button Content="Save offline database backup as..." Click="BackupDatabase_Click"
+                                             HorizontalAlignment="Left" Style="{StaticResource OutlineButton}"/>
+                                 </StackPanel>
+                             </Border>
+                             <Button Content="Sign out (keep local unsynced records)" Click="SignOut_Click"
                                     Background="#FBEAEC" Foreground="#A53646" HorizontalAlignment="Left"/>
                         </StackPanel>
                     </ScrollViewer>
@@ -519,7 +538,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center"
                            Foreground="#68819B" FontSize="11" TextTrimming="CharacterEllipsis"/>
-                <TextBlock Grid.Column="1" Text="StorePOS Windows 1.0.1  •  Azurate Software Solutions"
+                <TextBlock Grid.Column="1" Text="StorePOS Windows 1.0.2 Preview  •  Azurate Software Solutions"
                            FontSize="10" Foreground="#9CAABA" VerticalAlignment="Center"/>
             </Grid>
         </Border>

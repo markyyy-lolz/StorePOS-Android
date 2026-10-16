@@ -21,7 +21,7 @@ public sealed class SupabaseCloud
     async Task<JsonElement> Send(HttpMethod method,string path,object? body=null,bool auth=true,CancellationToken ct=default) {
         using var request=new HttpRequestMessage(method,path);
         request.Headers.TryAddWithoutValidation("apikey",StorePOSConfig.PublishableKey);
-        request.Headers.TryAddWithoutValidation("X-Client-Info","StorePOS-Windows/1.0.0");
+        request.Headers.TryAddWithoutValidation("X-Client-Info","StorePOS-Windows/1.0.2-preview.1");
         if(auth && Session is { AccessToken.Length:>0 } s)
             request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",s.AccessToken);
         if(body!=null)request.Content=JsonContent.Create(body,options:StorePOSConfig.Json);
@@ -137,7 +137,7 @@ public sealed class SupabaseCloud
         await EnsureFresh();
         var payload=new Dictionary<string,object> {
             ["p_shop_id"]=shopId,["p_device_id"]=deviceId,
-            ["p_device_name"]=Environment.MachineName,["p_app_version"]="Windows 1.0.0"
+            ["p_device_name"]=Environment.MachineName,["p_app_version"]="Windows 1.0.2-preview.1"
         };
         if(activate)payload["p_license_key"]=key;
         var response=await Rpc(activate?"activate_device_access":"validate_device_access",payload);

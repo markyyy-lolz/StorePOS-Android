@@ -212,14 +212,23 @@ public sealed class LocalStore
         SaveProduct(db,tx,product with {Stock=counted});Queue(db,tx,op);tx.Commit();
         return op;
     }
-    public QueueItem QueueCreate(ShopContext ctx,string sku,string name,decimal price,decimal opening) {
+    public QueueItem QueueCreate(ShopContext ctx,string sku,string name,decimal price,decimal opening,
+        string? barcode=null,decimal cost=0m,string unit="pc") {
         if(!AuditRules.CanEdit(ctx.Role))throw new InvalidOperationException("Manager approval required to add products.");
-        if(sku.Trim().Length==0 || name.Trim().Length==0 || price<0 || opening<0)
-            throw new InvalidOperationException("SKU, name, price, and stock are required.");
-        if(GetProducts(ctx.ShopId).Any(p=>p.Sku.Equals(sku.Trim(),StringComparison.OrdinalIgnoreCase)))
+        sku=sku.Trim(); name=name.Trim(); barcode=string.IsNullOrWhiteSpace(barcode)?null:barcode.Trim();
+        unit=unit.Trim().ToLowerInvariant();
+        if(sku.Length is < 1 or > 64 || name.Length is < 1 or > 180 || price<0 || cost<0 || opening<0 ||
+           price>100000000 || cost>100000000 || opening>100000000 || unit.Length is < 1 or > 20)
+            throw new InvalidOperationException("Enter a valid SKU, product name, price, cost, unit and opening stock.");
+        if(barcode!=null && (barcode.Length is < 3 or > 64 || !barcode.All(c=>char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')))
+            throw new InvalidOperationException("Invalid barcode. Use 3-64 letters, digits, dot, dash or underscore.");
+        var existing=GetProducts(ctx.ShopId);
+        if(existing.Any(p=>p.Sku.Equals(sku,StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("SKU already exists on this tablet.");
+        if(barcode!=null && existing.Any(p=>p.Barcode?.Equals(barcode,StringComparison.OrdinalIgnoreCase)==true))
+            throw new InvalidOperationException("Barcode is already assigned to a product on this tablet.");
         var epoch=TrustedEpoch(ctx.ShopId)??throw new InvalidOperationException("Cloud catalog has not been verified.");
-        var product=new Product(Guid.NewGuid(),ctx.ShopId,sku.Trim(),name.Trim(),null,price,0,opening,5);
+        var product=new Product(Guid.NewGuid(),ctx.ShopId,sku,name,barcode,price,cost,opening,5,Unit:unit);
         var id=Guid.NewGuid();
         var body=ToJson(new {product_id=product.Id,after=product.ToCloud()});
         var op=new QueueItem(id,ctx.ShopId,ctx.UserId,epoch,"create",body,"","queued",null,DateTimeOffset.UtcNow);
@@ -253,6 +262,35 @@ public sealed class LocalStore
         ));
         return items;
     }
+    /// <summary>
+    /// Save a SQLite-native consistent copy including WAL changes, without
+    /// altering or replacing the live POS database or its pending outbox.
+    /// </summary>
+    public void BackupDatabase(string destination)
+    {
+        var full=Path.GetFullPath(destination);
+        if(string.Equals(full,Path.GetFullPath(_database),StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot overwrite the live POS database.");
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        var temp=full+".partial-"+Guid.NewGuid().ToString("N");
+        try {
+            using(var source=Connect())
+            using(var backup=new SqliteConnection(new SqliteConnectionStringBuilder {
+                DataSource=temp, Mode=SqliteOpenMode.ReadWriteCreate, Pooling=false
+            }.ToString())) {
+                backup.Open();
+                source.BackupDatabase(backup);
+                using var check=backup.CreateCommand();
+                check.CommandText="PRAGMA integrity_check;";
+                if(check.ExecuteScalar()?.ToString()!="ok")
+                    throw new InvalidOperationException("Backup integrity verification failed.");
+            }
+            File.Move(temp,full,true);
+        } finally {
+            if(File.Exists(temp))File.Delete(temp);
+        }
+    }
+
     public void UpdateQueue(Guid id,string status,string? message) {
         if(status is not ("synced" or "review" or "queued"))throw new InvalidOperationException("Invalid queue status.");
         using var db=Connect();using var cmd=db.CreateCommand();
