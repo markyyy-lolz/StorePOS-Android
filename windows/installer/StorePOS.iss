@@ -1,5 +1,5 @@
 #define MyAppName "StorePOS Windows"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "Azurate Software Solutions"
 #define MyAppExeName "StorePOS.Windows.exe"
 
@@ -12,7 +12,7 @@ DefaultDirName={localappdata}\Programs\StorePOS Windows
 DefaultGroupName=StorePOS Windows
 PrivilegesRequired=lowest
 OutputDir=..\artifacts
-OutputBaseFilename=StorePOS-Windows-v1.0.1-Setup
+OutputBaseFilename=StorePOS-Windows-v1.0.2-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
