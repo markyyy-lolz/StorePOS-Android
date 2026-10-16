@@ -26,7 +26,23 @@ jobs:
           mkdir -p source-artifact
           git archive --format=zip --output=source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip HEAD -- windows/ .github/workflows/windows-build.yml
           unzip -Z1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip | tee source-artifact/manifest.txt
-          if grep -Ev '^windows/|^\.github/workflows/windows-build\.yml$' source-artifact/manifest.txt; then
+          if grep -Ev '^windows/|^\.github/$|^\.github/workflows/$|^\.github/workflows/windows-build\.yml
+            echo "Unexpected non-Windows source file" >&2
+            exit 1
+          fi
+          if unzip -Z1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip | grep -Ei '\.(exe|dll|pfx|jks|keystore|db|sqlite3)$'; then
+            echo "Refusing to publish binary, credential or database files" >&2
+            exit 1
+          fi
+          unzip -t source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip
+          sha256sum source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip
+      - name: Upload source ZIP with the official Windows developer prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload windows-v1.0.3-preview.1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip --clobber
+          gh release view windows-v1.0.3-preview.1 --json assets --jq '.assets[].name' | grep -Fx 'StorePOS-Windows-v1.0.3-SOURCE.zip'
+ source-artifact/manifest.txt; then
             echo "Unexpected non-Windows source file" >&2
             exit 1
           fi
