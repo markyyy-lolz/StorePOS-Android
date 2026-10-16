@@ -19,40 +19,34 @@ jobs:
         with:
           ref: 05aba70b69ed64f81678b6e8e793b102cbba6f9d
           persist-credentials: false
-      - name: Package only the Windows source and its build workflow
+      - name: Package and verify Windows source only
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p source-artifact
           git archive --format=zip --output=source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip HEAD -- windows/ .github/workflows/windows-build.yml
-          unzip -Z1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip | tee source-artifact/manifest.txt
-          if grep -Ev '^windows/|^\.github/$|^\.github/workflows/$|^\.github/workflows/windows-build\.yml
-            echo "Unexpected non-Windows source file" >&2
-            exit 1
-          fi
-          if unzip -Z1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip | grep -Ei '\.(exe|dll|pfx|jks|keystore|db|sqlite3)$'; then
-            echo "Refusing to publish binary, credential or database files" >&2
-            exit 1
-          fi
-          unzip -t source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip
+          python3 - <<'PY'
+          from zipfile import ZipFile
+          from pathlib import Path
+          archive = Path('source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip')
+          with ZipFile(archive) as z:
+              bad = [x.filename for x in z.infolist() if not
+                    (x.filename.startswith('windows/') or x.filename in
+                     ('.github/', '.github/workflows/', '.github/workflows/windows-build.yml'))]
+              unsafe = [x.filename for x in z.infolist() if
+                        x.filename.lower().endswith(('.exe','.dll','.pfx','.jks','.keystore','.db','.sqlite3'))]
+              names = z.namelist()
+              assert not bad and not unsafe, (bad, unsafe)
+              assert 'windows/StorePOS.Windows/MainWindow.xaml' in names
+              assert 'windows/StorePOS.Windows/MainWindow.xaml.cs' in names
+              assert 'windows/StorePOS.Windows/StorePOS.Windows.csproj' in names
+              assert 'windows/installer/StorePOS.iss' in names
+              assert len(names) >= 21
+              assert z.testzip() is None
+              print('Verified source-only archive:',len(names),'entries')
+          PY
           sha256sum source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip
-      - name: Upload source ZIP with the official Windows developer prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload windows-v1.0.3-preview.1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip --clobber
-          gh release view windows-v1.0.3-preview.1 --json assets --jq '.assets[].name' | grep -Fx 'StorePOS-Windows-v1.0.3-SOURCE.zip'
- source-artifact/manifest.txt; then
-            echo "Unexpected non-Windows source file" >&2
-            exit 1
-          fi
-          if unzip -Z1 source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip | grep -Ei '\.(exe|dll|pfx|jks|keystore|db|sqlite3)$'; then
-            echo "Refusing to publish binary, credential or database files" >&2
-            exit 1
-          fi
-          unzip -t source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip
-          sha256sum source-artifact/StorePOS-Windows-v1.0.3-SOURCE.zip
-      - name: Upload source ZIP with the official Windows developer prerelease
+      - name: Attach source ZIP to official Windows developer prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
