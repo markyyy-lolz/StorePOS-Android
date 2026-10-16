@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using Microsoft.Win32;
 using System.Net.Http;
 using System.Net;
 using Microsoft.Web.WebView2.Core;
@@ -25,6 +26,7 @@ public partial class MainWindow : Window
     ShopContext? _shop;
     LicenseSnapshot? _license;
     bool _online;
+    string? _unknownScannedBarcode;
 
     public MainWindow() {
         InitializeComponent();
@@ -328,12 +330,52 @@ public partial class MainWindow : Window
     void OpenSettings(object sender,RoutedEventArgs e)=>Pages.SelectedIndex=3;
 
     void FindProducts_Click(object sender,RoutedEventArgs e)=>RefreshLocal();
+
+    static bool LooksLikeBarcode(string code) =>
+        code.Length is >= 6 and <= 64 && code.Any(char.IsDigit)
+        && code.All(c=>char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
+
     void SearchInput_KeyDown(object sender,KeyEventArgs e) {
         if(e.Key!=Key.Enter)return;
+        e.Handled=true;
+        var code=SearchInput.Text.Trim();
+        if(_shop==null || code.Length==0)return;
         RefreshLocal();
-        if(ProductsGrid.Items.Count==1 && ProductsGrid.Items[0] is Product p)
-            ProductsGrid.SelectedItem=p;
-        if(ProductsGrid.SelectedItem is Product)AddToCart_Click(sender,new RoutedEventArgs());
+        var exact=_store.GetProducts(_shop.ShopId)
+            .Where(p=>p.IsActive &&
+                (p.Barcode?.Equals(code,StringComparison.OrdinalIgnoreCase)==true
+                || p.Sku.Equals(code,StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        if(exact.Count==1) {
+            ProductsGrid.SelectedItem=exact[0];
+            AddToCart_Click(sender,new RoutedEventArgs());
+        } else if(exact.Count>1) {
+            Status("Ambiguous barcode/SKU: resolve duplicates before checkout.");
+        } else if(ProductsGrid.ItemsSource is IEnumerable<Product> filtered
+                  && filtered.Count()==1) {
+            ProductsGrid.SelectedItem=filtered.Single();
+            AddToCart_Click(sender,new RoutedEventArgs());
+        } else if(!filteredOrOtherMatch() && LooksLikeBarcode(code)) {
+            if(!AuditRules.CanEdit(_shop.Role)) {
+                Status("Unknown barcode "+code+". Ask a manager to register this product.");
+                return;
+            }
+            try {
+                RequireTrading(inventory:true,manager:true);
+                _unknownScannedBarcode=code;
+                Pages.SelectedIndex=1;
+                SkuInput.Text=code;BarcodeInput.Text=code;
+                NameInput.Clear();PriceInput.Clear();CostInput.Text="0";
+                OpeningInput.Text="0";UnitInput.Text="pc";
+                NameInput.Focus();
+                Status("Barcode not found. Quick Add: enter name/price, review stock, then Add product.");
+            }catch(Exception ex) { ShowError(ex); }
+        } else {
+            Status("No exact barcode. Select a product from the results or ask a manager to add it.");
+        }
+
+        bool filteredOrOtherMatch() => ProductsGrid.ItemsSource is IEnumerable<Product> data
+            && data.Any();
     }
     void AddToCart_Click(object sender,RoutedEventArgs e) {
         try {
@@ -395,6 +437,44 @@ public partial class MainWindow : Window
             Status("Reprint sent to Windows spooler. This does not create a new sale.");
         }catch(Exception ex){ShowError(ex);}
     }
+
+    void SaveReceiptPdf_Click(object sender,RoutedEventArgs e) {
+        try {
+            if(OutboxGrid.SelectedItem is not QueueItem sale || sale.Kind!="sale" ||
+               string.IsNullOrWhiteSpace(sale.Receipt))
+                throw new InvalidOperationException("Select an archived cash-sale receipt first.");
+            var dialog=new SaveFileDialog {
+                Title="Save original StorePOS receipt as PDF",
+                Filter="PDF receipt (*.pdf)|*.pdf",
+                DefaultExt=".pdf",AddExtension=true,OverwritePrompt=true,
+                FileName="StorePOS-"+sale.Id.ToString("N")[..12]+".pdf"
+            };
+            if(dialog.ShowDialog(this)!=true)return;
+            ReceiptPdfExporter.Save(dialog.FileName,sale.Receipt,PaperWidthOf(sale.Receipt));
+            Status("Saved original receipt as PDF. This did not create a new sale.");
+        } catch(Exception ex){ShowError(ex);}
+    }
+    static int PaperWidthOf(string receipt) {
+        var rule=receipt.Split('\n')
+            .Select(line=>line.TrimEnd('\r'))
+            .FirstOrDefault(line=>line.Length>=32 && line.All(ch=>ch=='-'));
+        return rule?.Length==32?58:80;
+    }
+    void BackupDatabase_Click(object sender,RoutedEventArgs e) {
+        try {
+            RequireTrading(inventory:true,manager:true);
+            var dialog=new SaveFileDialog {
+                Title="Save verified StorePOS offline SQLite backup",
+                Filter="SQLite database (*.sqlite3)|*.sqlite3",
+                DefaultExt=".sqlite3",AddExtension=true,OverwritePrompt=true,
+                FileName="StorePOS-Backup-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".sqlite3"
+            };
+            if(dialog.ShowDialog(this)!=true)return;
+            _store.BackupDatabase(dialog.FileName);
+            Status("Verified SQLite backup saved; live database and pending sales preserved.");
+        } catch(Exception ex){ShowError(ex);}
+    }
+
     void AdjustStock_Click(object sender,RoutedEventArgs e) {
         try {
             RequireTrading(inventory:true);
@@ -423,8 +503,30 @@ public partial class MainWindow : Window
             RequireTrading(inventory:true,manager:true);
             var price=DecimalValue(PriceInput.Text,"selling price");
             var opening=DecimalValue(OpeningInput.Text,"opening stock");
-            _store.QueueCreate(_shop!,SkuInput.Text,NameInput.Text,price,opening);
-            RefreshLocal();Status("New product saved locally (stable UUID).");
+
+            var cost=string.IsNullOrWhiteSpace(CostInput.Text)?0m:
+                DecimalValue(CostInput.Text,"cost price");
+            var barcode=BarcodeInput.Text.Trim();
+            _store.QueueCreate(_shop!,SkuInput.Text,NameInput.Text,price,opening,
+                barcode,cost,UnitInput.Text);
+            var isQuickAdd=_unknownScannedBarcode!=null &&
+                barcode.Equals(_unknownScannedBarcode,StringComparison.OrdinalIgnoreCase);
+            _unknownScannedBarcode=null;
+            RefreshLocal();Status("New product saved locally (stable UUID, pending cloud review).");
+            if(isQuickAdd) {
+                var created=_store.GetProducts(_shop!.ShopId)
+                    .FirstOrDefault(p=>p.Barcode?.Equals(barcode,StringComparison.OrdinalIgnoreCase)==true);
+                Pages.SelectedIndex=0;
+                SearchInput.Text=barcode;
+                RefreshLocal();
+                if(created!=null && created.Stock>0) {
+                    ProductsGrid.SelectedItem=created;
+                    AddToCart_Click(sender,new RoutedEventArgs());
+                } else {
+                    SearchInput.Focus();
+                    Status("Product created. Restock before checkout if needed.");
+                }
+            }
             _=SyncBestEffort();
         }catch(Exception ex){ShowError(ex);}
     }
