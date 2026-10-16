@@ -42,7 +42,8 @@ public static class ReceiptPrinter
         b.AppendLine(sale.ClientKey.ToString());
         b.AppendLine("Pending cloud validation and reconciliation.");
         b.AppendLine("Keep this receipt until confirmed.");
-        b.AppendLine("Powered by StorePOS / Azurate");
+        b.AppendLine(new string('-',width));
+        foreach(var line in PosSupplierFooter.CenteredLines(width)) b.AppendLine(line);
         b.AppendLine();
         b.AppendLine();
         return b.ToString();
@@ -54,11 +55,12 @@ public static class ReceiptPrinter
         var content=receipt.Replace("\r\n","\n").Replace("\n","\r\n");
         // Explicit ASCII avoids corrupt multibyte sequences on simple ESC/POS printers.
         var body=Encoding.ASCII.GetBytes(content);
-        var bytes=new byte[body.Length+10];
+        var bytes=new byte[2 + body.Length + 2 + 3];
         bytes[0]=0x1B;bytes[1]=0x40; // ESC @ initialization
         Buffer.BlockCopy(body,0,bytes,2,body.Length);
-        bytes[^8]=0x0A;bytes[^7]=0x0A;bytes[^6]=0x0A;
-        bytes[^5]=0x1D;bytes[^4]=0x56;bytes[^3]=0x00; // full cut
+        var end=2+body.Length;
+        bytes[end++]=0x0A; bytes[end++]=0x0A; // feed before cutter
+        bytes[end++]=0x1D; bytes[end++]=0x56; bytes[end]=0x00; // full cut
         using var handle=Open(windowsPrinterName);
         var doc=new DOC_INFO_1 {pDocName="StorePOS Windows Receipt",pDatatype="RAW",pOutputFile=null};
         if(!StartDocPrinter(handle,1,ref doc))throw PrinterError("Cannot start print job");
