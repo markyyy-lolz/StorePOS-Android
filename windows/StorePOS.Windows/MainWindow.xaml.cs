@@ -207,6 +207,9 @@ public partial class MainWindow : Window
         TaxText.Text=$"₱{tax:N2}";
         TotalText.Text=$"₱{total:N2}";
         CheckoutButton.IsEnabled=_shop!=null && _license?.Valid==true && _cart.Count>0;
+        CartEmptyState.Visibility=_cart.Count==0?Visibility.Visible:Visibility.Collapsed;
+        CartCount.Text=_cart.Count==0 ? "Scan items to begin checkout" :
+            _cart.Count==1 ? "1 item in current sale" : $"{_cart.Count} items in current sale";
         var tendered=decimal.TryParse(TenderInput.Text,NumberStyles.Number,
             CultureInfo.CurrentCulture,out var localTender) ? localTender :
             decimal.TryParse(TenderInput.Text,NumberStyles.Number,
