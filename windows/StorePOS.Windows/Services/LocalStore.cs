@@ -276,7 +276,7 @@ public sealed class LocalStore
         try {
             using(var source=Connect())
             using(var backup=new SqliteConnection(new SqliteConnectionStringBuilder {
-                DataSource=temp, Mode=SqliteOpenMode.ReadWriteCreate
+                DataSource=temp, Mode=SqliteOpenMode.ReadWriteCreate, Pooling=false
             }.ToString())) {
                 backup.Open();
                 source.BackupDatabase(backup);
