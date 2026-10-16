@@ -1,30 +1,33 @@
-# StorePOS Windows — native WPF desktop client
+# StorePOS Windows — Native retail POS for Windows 10/11
 
-StorePOS Windows is a **real C#/.NET 10 WPF app for Windows 10/11 x64**. It is NOT a Python program, browser-only wrapper or Electron application.
+A real **C#/.NET 10 WPF Windows desktop app** with in-house SQLite WAL and existing StorePOS Supabase backend. **No Python, Electron or browser wrapper.**
 
-## Current build
-- **v1.0.2-preview.1** (developer preview, not fully feature-parity certified)
-- GitHub Actions: `.github/workflows/windows-build.yml`.
-- Creates a portable self-contained `StorePOS.Windows.exe` and per-user Inno Setup installer `StorePOS-Windows-v1.0.2-Setup.exe`.
-- Download the prerelease from the repository GitHub Releases page after the build succeeds.
+## Latest candidate
+- **v1.0.3-preview.1 — desktop checkout UI redesign**, with midnight-navy sidebar, improved catalog, cash panel, barcode workflow and action-oriented Windows activation state.
+- GitHub Actions: `.github/workflows/windows-build.yml`. Creates standalone Windows x64 EXE + Inno Setup installer.
+- Developer prerelease only: validation on actual Windows cashier hardware required before production.
 
-## Current features
-Native cashier UI with barcode scanning, unknown-barcode manager Quick Add, customer cash tender/change, offline SQLite WAL receipts and stock deductions, queued cloud reconciliation, shop-scoped Supabase authentication, device licensing, stock movements/physical count, conflict review, Windows USB/Bluetooth RAW ESC/POS receipt printing, original receipt PDF export, and verified local database snapshot backup.
+## Existing functionality
+- Supabase Auth + StorePOS shop-scoped cloud database + device licensing.
+- SQLite offline-first sales/stock journal and role-scoped cloud reconciliation.
+- Windows-installed USB/Bluetooth ESC/POS receipt printing, 58/80mm receipt width, original receipt PDF export, audited original receipt IDs.
+- Unknown scanned barcode → manager Quick Add with price/cost/barcode/unit/stock, queued for conflict-aware sync.
+- Manager product and stock changes; saved offline database backup, queue status and needs-review.
 
-Prints the POS provider contact footer at the bottom of new receipts:
-**AZURATE SOFTWARE SOLUTION · PULO SAN ROQUE, PAOMBONG, BULACAN · 09241134301**.
+### How to use
+1. Install the `StorePOS-Windows-v1.0.3-Setup.exe` developer prerelease on a spare **Windows 10/11 x64** PC.
+2. Login online as an approved StorePOS employee. The UI distinguishes being **online** from having a valid **Windows license**.
+3. If license is not active, use the top amber **Activate device** button; enter the issued device key in Settings.
+4. Sync to download the shop catalog after successful activation.
+5. Test barcode scanning, cash sales, Windows printer and receipt PDF; then test reconnect without duplicate cloud sales.
+6. Do not uninstall/clear app data while any local sales remain queued or needs-review.
 
-## Database architecture
-- Cloud: **existing StorePOS Supabase** `qgyzdoltjlryjthxxscw`, using staff JWTs and StorePOS shop-scoped RPCs. No service-role key is shipped.
-- Offline: **per-Windows-PC SQLite** at `%LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3`.
-- Sync uses idempotent operation UUIDs, shop epoch, actor identity and manager-review status on business conflicts.
-- Cloud catalog overwrite is blocked while unsynced local operations exist.
-- Cash-only offline; no shared last-item inventory guarantee when two devices cannot communicate.
+## Limitations
+Full Android StorePOS v1.8.6 feature parity remains incomplete: complex promotions, extensive analytics/X/Z, multi-operator printing authority, and some staff, supplier and payment workflows are not yet fully ported. Windows login/Turnstile and actual VOZY G80 printing have not been field-certified. There is no commercial Authenticode signature.
 
-## Important limitations
-Android v1.8.6 **full parity is not complete**. See `windows/RELEASE_NOTES.md` for exact gaps.
-- Cloudflare Turnstile-to-Windows login not field-verified.
-- PDF, Bluetooth/USB Windows spooler, device seat, and actual cloud reconciliation must be tested with physical equipment.
-- No commercial Windows publisher code-signing cert; Microsoft SmartScreen may warn.
-- No proven fiscal/BIR receipt compliance. All offline receipts show provisional status.
-- Never uninstall the installed StorePOS version or clear local SQLite if pending sales exist.
+## Data
+- StorePOS cloud: `qgyzdoltjlryjthxxscw` (shop-isolated).
+- Per-device SQLite: `%LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3`.
+- Windows installer updates the app without deleting that SQLite database.
+
+Azurate Software Solutions — Pulo San Roque, Paombong, Bulacan.

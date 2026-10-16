@@ -2,7 +2,7 @@ name: StorePOS Windows CI and Installer
 on:
   workflow_dispatch:
   push:
-    branches: [feature/storepos-windows-v1, feature/storepos-windows-v101-aronium-ui, feature/storepos-windows-v102-native-parity]
+    branches: [feature/storepos-windows-v1, feature/storepos-windows-v101-aronium-ui, feature/storepos-windows-v103-pos-ui]
     paths: ["windows/**", ".github/workflows/windows-build.yml"]
   pull_request:
     paths: ["windows/**", ".github/workflows/windows-build.yml"]
@@ -46,37 +46,37 @@ jobs:
           if (!(Test-Path $iscc)) { throw "Inno Setup not installed" }
           & $iscc 'windows/installer/StorePOS.iss'
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-          if (!(Test-Path windows/artifacts/StorePOS-Windows-v1.0.2-Setup.exe)) { throw 'Installer missing' }
+          if (!(Test-Path windows/artifacts/StorePOS-Windows-v1.0.3-Setup.exe)) { throw 'Installer missing' }
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: StorePOS-Windows-v1.0.2-Installer
-          path: windows/artifacts/StorePOS-Windows-v1.0.2-Setup.exe
+          name: StorePOS-Windows-v1.0.3-Installer
+          path: windows/artifacts/StorePOS-Windows-v1.0.3-Setup.exe
           if-no-files-found: error
       - name: Upload portable output
         uses: actions/upload-artifact@v4
         with:
-          name: StorePOS-Windows-v1.0.2-Portable
+          name: StorePOS-Windows-v1.0.3-Portable
           path: windows/publish/
           if-no-files-found: error
 
       - name: Publish unsigned native Windows developer prerelease
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/storepos-windows-v102-native-parity'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/storepos-windows-v103-pos-ui'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "windows-v1.0.2-preview.1"
-          $setup = "windows/artifacts/StorePOS-Windows-v1.0.2-Setup.exe"
+          $tag = "windows-v1.0.3-preview.1"
+          $setup = "windows/artifacts/StorePOS-Windows-v1.0.3-Setup.exe"
           if (!(Test-Path $setup)) { throw "Missing tested Windows installer" }
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $setup --clobber
           } else {
-            gh release create $tag $setup --prerelease --target "$env:GITHUB_SHA" --title "StorePOS Windows v1.0.2 Developer Preview" --notes-file windows/RELEASE_NOTES.md
+            gh release create $tag $setup --prerelease --target "$env:GITHUB_SHA" --title "StorePOS Windows v1.0.3 Visual Redesign Preview" --notes-file windows/RELEASE_NOTES.md
           }
           if ($LASTEXITCODE -ne 0) { throw "Windows developer prerelease failed" }
           $asset = gh release view $tag --json assets --jq '.assets[].name'
-          if ($LASTEXITCODE -ne 0 -or $asset -notcontains "StorePOS-Windows-v1.0.2-Setup.exe") {
+          if ($LASTEXITCODE -ne 0 -or $asset -notcontains "StorePOS-Windows-v1.0.3-Setup.exe") {
             throw "GitHub release missing Windows setup asset"
           }

@@ -1,29 +1,34 @@
-# StorePOS Windows v1.0.2-preview.1 — Native WPF Developer Preview
+# StorePOS Windows v1.0.3-preview.1 — Retail Cashier UI Redesign
 
-**Windows 10/11 x64, C#/.NET 10 WPF, self-contained. NOT Python, Electron, or a web wrapper.**
+**Native WPF / C# / .NET 10 developer preview, Windows 10/11 x64. No Python.**
 
-## Included
-- Existing Aronium-inspired native desktop cashier UI with barcode/SKU search and keyboard shortcuts.
-- Simple cash sales, atomic offline SQLite/WAL stock adjustment and immutable sync outbox.
-- Authentication to the existing StorePOS Supabase shop, per-device licensing and online reconnect replay via StorePOS reconciliation RPCs.
-- Manager-only **Smart Barcode Quick Add**: unknown scanned barcode prompts product registration with name, SKU, selling price, cost, unit and opening stock, queued for conflict-aware cloud synchronization. Does not guess remote product information.
-- Windows-installed USB/Bluetooth ESC/POS printer spooler support.
-- **Azurate supplier support footer** on new Windows receipts: AZURATE SOFTWARE SOLUTION; PULO SAN ROQUE, PAOMBONG, BULACAN; 09241134301.
-- **Save Receipt as PDF** from the original archived printed receipt string, with 58mm/80mm paper-width layout.
-- **Save Verified SQLite Backup** (SQLite backup API + integrity check) without deleting local sales.
-- Sales and inventory outbox status / Needs Review, stock adjustments and manager physical count.
+## What's improved
+- Original StorePOS **midnight-navy navigation + brighter checkout workspace**, inspired by familiar fast Windows retail POS interaction patterns, with distinct Azurate design language.
+- Redesigned merchant header with device connectivity, operator, license state and a prominent **Activate device** shortcut when the Windows seat is not licensed.
+- Clear activation banner on the POS page. A connected session does **not** falsely imply that a license is active or that products were downloaded.
+- Larger barcode/SKU scanner field, high-legibility product table, refined stock/price information and function-key hints.
+- Helpful empty states for unlicensed device, no cached catalog and a search with no results. Every state routes to an actual existing action (activate, sync, clear).
+- Redesigned cash checkout area with a visible cash-only label, useful empty-cart state, larger totals, cash received and change.
+- Checkout button is disabled for an empty basket or a device without a valid license. Cashier shortcuts continue to invoke the same existing permission checks.
+- The pre-existing offline SQLite, cloud queue, Quick Add, original receipt/PDF, Azurate footer and database backup remain untouched.
 
-## Security and compatibility
-- This Windows device needs its own authorized StorePOS device seat. Authentication/CAPTCHA and reconciliation must be tested with a real authorized Windows account before commercial use.
-- Offline cash is provisional and can require conflict review; two independently offline devices do not share stock until synced.
-- This installer is **unsigned by a commercial code-signing certificate**; Windows SmartScreen may warn. Do not bypass security warnings on a machine you do not trust.
-- Installer does not delete `%LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3`.
-- Does not modify Android StorePOS, MotoPOS or BrewPOS source/data; no Supabase migrations.
+## Native functionality inherited from v1.0.2
+- Barcode scanning and manager Quick Add, offline cash sale journal, receipt reprints, inventory movements, local backup, PDF export, Windows ESC/POS spooler, Supabase cloud sync and Windows device licensing.
+- POS supplier contact footer: **AZURATE SOFTWARE SOLUTION — PULO SAN ROQUE, PAOMBONG, BULACAN — 09241134301.**
 
-## Not yet equal to Android v1.8.6
-Full Android feature parity is **NOT claimed**. Missing/unverified Windows modules include complex retail offers and refunds, full staff/client/supplier/loyalty operations, comprehensive cloud reports including X/Z, PayMongo/card/QR verification, multi-terminal LAN authority, PDF fidelity on a real printer, and dedicated Windows barcode/hardware acceptance testing.
+## Testing
+- CI: `dotnet build -warnaserror`, native Windows offline tests, x64 self-contained publish, Inno Setup installer.
+- Manual QA remaining: 1366×768 / 1600×900 at 100–150% Windows scaling; scanner focus/Enter, invalid vs activated seat, genuine shop catalog, offline/reconnect, Vozy G80 printer + cutter, PDF parity.
 
-## QA
-The GitHub Actions workflow gates publication on `dotnet build -warnaserror`, `dotnet test`, win-x64 self-contained publish and Inno Setup installer generation. Those automated checks do not substitute for end-to-end live grocery tests.
+## Safety
+- This is a **developer prerelease**, not certified complete Android v1.8.6 feature parity or commercial production use.
+- **Commercial Authenticode code signing and physical equipment tests have not been completed.** Test on a nonproduction Windows PC.
+- Existing Android StorePOS stable APK, shop database, pending device outboxes and MotoPOS/BrewPOS data were not modified.
+- Windows local data is preserved at `%LOCALAPPDATA%\Azurate\StorePOS.Windows\storepos.sqlite3`; install over the existing Windows preview, never delete that directory while pending sales exist.
 
-**Recommended use: isolated testing on a spare Windows PC only until login, receipt printer, and original actor cloud replay are validated.**
+## Design references
+- https://www.aronium.com/ — fast keyboard/scanner cashier interaction.
+- https://help.aronium.com/hc/en-us/articles/208766849-Workspace — dense, clear sales workspace hierarchy.
+- https://www.behance.net/gallery/224138979/CirclePOS-Smart-Point-of-Sale-Interface — contemporary retail visual polish.
+
+StorePOS Windows is original Azurate software and is not affiliated with those references.
