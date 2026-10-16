@@ -608,7 +608,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center"
                            Foreground="#68819B" FontSize="11" TextTrimming="CharacterEllipsis"/>
-                <TextBlock Grid.Column="1" Text="StorePOS Windows 1.0.2 Preview  •  Azurate Software Solutions"
+                <TextBlock Grid.Column="1" Text="StorePOS Windows 1.0.3 UI Preview  •  Azurate Software Solutions"
                            FontSize="10" Foreground="#9CAABA" VerticalAlignment="Center"/>
             </Grid>
         </Border>
