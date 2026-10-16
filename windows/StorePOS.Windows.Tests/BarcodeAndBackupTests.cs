@@ -43,7 +43,7 @@ public sealed class BarcodeAndBackupTests
         try {
             store.BackupDatabase(file);
             using var db=new SqliteConnection(new SqliteConnectionStringBuilder{
-                DataSource=file,Mode=SqliteOpenMode.ReadOnly
+                DataSource=file,Mode=SqliteOpenMode.ReadOnly,Pooling=false
             }.ToString());
             db.Open();
             using var check=db.CreateCommand();
