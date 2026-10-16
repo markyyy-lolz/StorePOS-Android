@@ -104,6 +104,10 @@ public partial class MainWindow : Window
     void UpdateConnectivity() {
         ConnectionText.Text=_online?"● ONLINE":"● OFFLINE • LOCAL";
         ConnectionText.Foreground=(Brush)new BrushConverter().ConvertFrom(_online?"#137958":"#AC6823")!;
+        var activated=_shop!=null && _license?.Valid==true;
+        ActivateTopButton.Visibility=_shop!=null && !activated ? Visibility.Visible : Visibility.Collapsed;
+        SetupBanner.Visibility=_shop!=null && !activated ? Visibility.Visible : Visibility.Collapsed;
+        if(CheckoutButton!=null) CheckoutButton.IsEnabled=activated && _cart.Count>0;
         if(_shop!=null) {
             ShopName.Text=_shop.ShopName;
             OperatorText.Text=_shop.Role.ToUpperInvariant()+" • "+_shop.UserId.ToString("N")[..8];
@@ -164,7 +168,27 @@ public partial class MainWindow : Window
              p.Barcode?.Contains(query,StringComparison.OrdinalIgnoreCase)==true)).ToList();
         ProductsGrid.ItemsSource=filtered;
         ProductsEmptyState.Visibility=filtered.Count==0?Visibility.Visible:Visibility.Collapsed;
-        ProductsCountText.Text=$"{filtered.Count} shown • {data.Count} cached products";
+        if(filtered.Count==0) {
+            if(_license?.Valid!=true) {
+                EmptyTitleText.Text="Finish activating this Windows terminal";
+                EmptyDescriptionText.Text="Your StorePOS shop is linked, but the Windows device has no active license. Activate it to download the verified catalog.";
+                EmptyStateActionButton.Content="Go to device activation  →";
+                EmptyStateActionButton.Tag="activate";
+            } else if(data.Count==0) {
+                EmptyTitleText.Text="No products loaded yet";
+                EmptyDescriptionText.Text="Synchronize this shop's catalog, or open Inventory to register your first item.";
+                EmptyStateActionButton.Content="Synchronize catalog  ↻";
+                EmptyStateActionButton.Tag="sync";
+            } else {
+                EmptyTitleText.Text="No matching products";
+                EmptyDescriptionText.Text="Check the product name, SKU or barcode. Try clearing the current search.";
+                EmptyStateActionButton.Content="Clear search  →";
+                EmptyStateActionButton.Tag="clear";
+            }
+        }
+        ProductsCountText.Text=_license?.Valid!=true
+            ? "Device activation required • catalog not downloaded"
+            : $"{filtered.Count} shown • {data.Count} cached products";
         InventoryGrid.ItemsSource=data;
         InventoryCountText.Text=$"{data.Count} products";
         OutboxGrid.ItemsSource=_store.GetOutbox(_shop.ShopId);
@@ -182,6 +206,7 @@ public partial class MainWindow : Window
         SubtotalText.Text=$"₱{subtotal:N2}";
         TaxText.Text=$"₱{tax:N2}";
         TotalText.Text=$"₱{total:N2}";
+        CheckoutButton.IsEnabled=_shop!=null && _license?.Valid==true && _cart.Count>0;
         var tendered=decimal.TryParse(TenderInput.Text,NumberStyles.Number,
             CultureInfo.CurrentCulture,out var localTender) ? localTender :
             decimal.TryParse(TenderInput.Text,NumberStyles.Number,
@@ -324,6 +349,26 @@ public partial class MainWindow : Window
         finally {_syncLock.Release();UpdateConnectivity();}
     }
     async void SyncNow_Click(object sender,RoutedEventArgs e)=>await SyncBestEffort();
+    void GoToActivation_Click(object sender,RoutedEventArgs e) {
+        Pages.SelectedIndex=3;
+        ActivationInput.Focus();
+        Status("Activate this licensed Windows terminal; your current shop and sales remain unchanged.");
+    }
+    async void EmptyStateAction_Click(object sender,RoutedEventArgs e) {
+        switch(EmptyStateActionButton.Tag?.ToString()) {
+            case "activate":
+                GoToActivation_Click(sender,e);
+                break;
+            case "sync":
+                await SyncBestEffort();
+                break;
+            case "clear":
+                SearchInput.Clear();
+                RefreshLocal();
+                SearchInput.Focus();
+                break;
+        }
+    }
     void OpenPos(object sender,RoutedEventArgs e)=>Pages.SelectedIndex=0;
     void OpenInventory(object sender,RoutedEventArgs e)=>Pages.SelectedIndex=1;
     void OpenHistory(object sender,RoutedEventArgs e){Pages.SelectedIndex=2;RefreshLocal();}
