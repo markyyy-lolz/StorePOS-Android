@@ -8,7 +8,7 @@ public static class StorePOSConfig
     // Supabase publishable key is deliberately public; NEVER place a service_role key here.
     public const string Url = "https://qgyzdoltjlryjthxxscw.supabase.co";
     public const string PublishableKey = "sb_publishable_mCjtfE-W75s1yyUdw2NY2g_z6ic5DIc";
-    public const string AppVersion = "1.0.2-preview.1";
+    public const string AppVersion = "1.0.3-preview.1";
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) {
         PropertyNameCaseInsensitive = true, WriteIndented = false
     };
