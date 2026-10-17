@@ -10,6 +10,8 @@ import java.nio.charset.Charset
 sealed interface ThermalReceiptElement {
     data class Text(val line: String) : ThermalReceiptElement
     data class QrCode(val content: String) : ThermalReceiptElement
+    /** Physical full-cut boundary between distinct customer paper slips. */
+    data object Cut : ThermalReceiptElement
 }
 
 object ThermalReceiptDecoder {
@@ -58,6 +60,8 @@ object ThermalReceiptDecoder {
                     when (byte(i + 1)) {
                         0x56 -> {
                             require(i + 2 < payload.size) { "Incomplete paper cut command." }
+                            flushPartialLine()
+                            result += ThermalReceiptElement.Cut
                             i += 3
                         }
                         0x28 -> {
@@ -95,6 +99,9 @@ object ThermalReceiptDecoder {
             }
         }
         flushPartialLine()
+        // The final cutter ends the print job; only interior cuts delimit
+        // a separate voucher/page. Preserve the old single-receipt decode API.
+        while (result.lastOrNull() is ThermalReceiptElement.Cut) result.removeAt(result.lastIndex)
         return result
     }
 }

@@ -230,19 +230,8 @@ class BluetoothReceiptPrinter(
             }
 
             sections["footer"] = buildList {
-                // Eligibility only; staff must validate the receipt and record actual giveaway.
-                if (receiptFreebieRule?.qualifies(sale.totalAmount) == true &&
-                    receiptFreebieRule.shopId == sale.shopId) {
-                    add(thin)
-                    add(center("FREE ITEM REWARD - YOU QUALIFY!", width))
-                    val gift = receiptFreebieRule.quantity.toString() +
-                        " x " + receiptFreebieRule.giftName.trim()
-                    addAll(gift.chunked(width).map { center(it, width) })
-                    add(center("PRICE: PHP 0.00", width))
-                    add(center("Present receipt to claim", width))
-                    add(center("Subject to staff verification", width))
-                    add(center("One reward per verified sale", width))
-                }
+                // Receipt ends as usual. Promotional claim slip prints on a
+                // separate piece of paper after the first full autocut.
                 add(thin)
                 receiptFooter?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
                     add(center(it, width))
@@ -293,6 +282,21 @@ class BluetoothReceiptPrinter(
             // Keep the adjustable gap after the final supplier contact line.
             // The hardware cutter remains full.
             out.write(ReceiptCutSettings.extraFeedAndFullCut(footerFeedLines))
+            if (receiptFreebieRule?.qualifies(sale.totalAmount) == true &&
+                receiptFreebieRule.shopId == sale.shopId) {
+                // Exactly two full cuts for qualifying sales, one for each
+                // physical paper piece. The print queue stores BOTH as one
+                // immutable byte stream to avoid separate duplicate jobs.
+                out.write(
+                    FreeItemClaimSlip.render(
+                        shopName = shopName,
+                        sale = sale,
+                        rule = receiptFreebieRule,
+                        paperWidth = paperWidth,
+                        footerFeedLines = footerFeedLines
+                    )
+                )
+            }
             return out.toByteArray()
         }
 

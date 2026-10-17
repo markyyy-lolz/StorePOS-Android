@@ -1,30 +1,27 @@
-# StorePOS Android v1.8.8 — Spend & Get Free Item on Receipts
+# StorePOS Android v1.8.9 — Separate Freebie Claim Slip with Auto-Cut
 
-**Build 40 • Update over Android v1.8.7 (39) • package `com.storepos.app`.**
+**Build 41 • Safe update over v1.8.8 • package `com.storepos.app`.**
 
-## New: Shop-wide spend threshold free item
-- Owner/admin: **Settings → Spend & Get Free Item → Configure Free Item Promo**.
-- Default is DISABLED. Set a minimum paid total (example PHP 1,500), item name, quantity and enable the offer. The configured rule syncs through the dedicated `public.storepos_receipt_freebie_rules` table with StorePOS-only shop RLS.
-- Eligible *completed* sales include **FREE ITEM REWARD**, the free item description/quantity and **PRICE: PHP 0.00** on 58mm/80mm physical thermal receipts.
-- Threshold compares the FINAL payable total after discounts, not simply the gross subtotal. Receipts below the limit show no free item notice.
-- Rules are saved locally on each tablet in a shop-scoped SQLite blob after cloud refresh. A verified cached rule supports offline cash sale receipts even after the app is closed and reopened without internet. The exact offline thermal receipt bytes are stored with the queued sale, so its Save PDF output matches.
-- Online receipt PDF uses the same thermal renderer and reward rule. The existing Azurate supplier footer and all StorePOS v1.8.7 offline catalog protections remain unchanged.
+## Receipt and promotional voucher print separation
+- **Qualifying purchase:** first print the normal sales receipt through the standard store and Azurate supplier footer, then **FULL AUTO-CUT**, then print a separate **FREE ITEM CLAIM SLIP** containing the shop name, reward, quantity, price PHP 0.00, original sale reference and staff-verification reminder, followed by **another FULL AUTO-CUT**.
+- **Non-qualifying purchase / disabled promo:** one normal receipt and one full cut, unchanged.
+- Uses the existing device's configurable receipt footer-to-cut feed lines for both full cuts.
+- Thermal receipt and claim slip are sent in **one immutable print stream** and (where applicable) remain together in the saved offline receipt and shared print queue, preventing separate voucher print-queue jobs.
+- **Receipt PDF parity:** the ESC/POS decoder preserves the internal full-cut boundary. PDF displays the sales receipt and qualifying claim slip **on separate pages**, keeping print/PDF content consistent.
+- **Offline sale:** provisional voucher uses the unique `OFF-...` reference and clearly states **OFFLINE - PENDING SYNC**. No invented final cloud sale number.
+- Reprints produce the same claim slip and sale reference, but **do not authorize additional gifts**. Staff must check whether the gift was already issued.
 
-## Safety and redemption limitation
-- The printed reward is a **claim eligibility notice**, not a recorded redemption, automatic stock deduction or proof the free item has been handed over.
-- Staff must verify the receipt and independently record issuance/stock adjustment. **Do not hand out multiple gifts against duplicate printouts**. Cloud-enforced one-time redemption scanning is a separate future feature.
-- Configurations are initially disabled for every shop; no sale, inventory or MotoPOS/BrewPOS data has been changed.
-- The Supabase StorePOS-only migration is required. If a tablet is offline and has not downloaded an enabled rule, no offer is shown; sync Settings/POS online once first.
-- No gift is added to the paid cart or cloud sale_items, preventing unsupported inventory/tax manipulation.
+## Existing behavior preserved
+- Store owner/admin can configure the spending threshold, item, and quantity under Settings → Spend & Get Free Item. Default OFF. Settings cache to shop-scoped SQLite; offline cash sales can generate the slip after initial online sync.
+- Paid sale totals and tax calculations unchanged; free item is not automatically added to `sale_items` nor deducted from stock. There is no one-time claim ledger in this version.
+- No new Supabase migration or changes to StorePOS/MotoPOS/BrewPOS inventory, history or user data.
+- Standard receipt, X/Z and printer test reports preserve existing full-cut behavior.
 
-## Safe deployment on Samsung Galaxy Tab A9+
-1. Back up device's offline outbox and check unsynced sales. **Install directly over v1.8.7**, never uninstall/clear data.
-2. While online as StorePOS owner/admin, configure and enable a rule in Settings.
-3. On each tablet, open POS online so the shared rule can be downloaded and cached.
-4. Test a qualifying cash sale (example PHP 1,500) and one PHP 1,499 sale; inspect the printed receipt and Save PDF.
-5. Turn off internet; close and reopen StorePOS; complete an authorized test cash sale, confirm same reward notice and local printing, then reconnect and verify idempotent sale sync.
-6. Test 80mm VOZY G80 on physical devices before production use.
+## Upgrade/test
+1. **Install over v1.8.8**, do not uninstall or clear data while offline sales are pending.
+2. Configure a rule (for example PHP 1,500 / free rice 1kg), and sync both tablets online.
+3. Test PHP 1,499.99 (one normal cut) and PHP 1,500.00 (two physical pieces, two cuts) with the VOZY G80.
+4. Check both online and offline scenarios, save PDF, verify its page split and the exact sale reference.
+5. Avoid physically issuing the reward twice after any receipt reprint; proper redemption tracking is a separate requirement.
 
-## Verification
-- GitHub workflow runs unit tests, Android lint, APK build and signature verification before publishing.
-- Live printer, stock handling for manually redeemed rewards, and production multi-tablet acceptance remain manual checks.
+**Status:** Android unit tests, lint, packaging, signature verification and GitHub Release occur in CI. Printer hardware verification must still be performed on the actual VOZY G80.
