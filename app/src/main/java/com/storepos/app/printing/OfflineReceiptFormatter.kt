@@ -5,6 +5,7 @@ import com.storepos.app.data.model.CheckoutPayment
 import com.storepos.app.data.model.Sale
 import com.storepos.app.data.model.Shop
 import com.storepos.app.data.model.ShopSettings
+import com.storepos.app.data.model.ReceiptFreebieRule
 import java.time.Instant
 import java.util.Locale
 
@@ -36,7 +37,8 @@ object OfflineReceiptFormatter {
         paperWidth: Int,
         cashierLabel: String?,
         footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES,
-        createdAt: String = Instant.now().toString()
+        createdAt: String = Instant.now().toString(),
+        receiptFreebieRule: ReceiptFreebieRule? = null
     ): ProvisionalReceipt {
         require(cart.isNotEmpty()) { "Cannot print an empty cart." }
         require(payments.isNotEmpty() && payments.all { it.method == "cash" }) {
@@ -83,7 +85,8 @@ object OfflineReceiptFormatter {
             showDigitalQr = false,
             compactMode = settings.receiptCompactMode,
             sectionOrder = settings.receiptSectionOrder,
-            footerFeedLines = footerFeedLines
+            footerFeedLines = footerFeedLines,
+            receiptFreebieRule = receiptFreebieRule
         )
         return ProvisionalReceipt(sale.saleNumber, sale, bytes)
     }
