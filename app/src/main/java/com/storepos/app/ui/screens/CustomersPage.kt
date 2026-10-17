@@ -14,6 +14,8 @@ import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
 import com.storepos.app.data.model.Customer
 import com.storepos.app.data.model.CustomerInsert
+import com.storepos.app.data.model.CustomerReceivable
+import com.storepos.app.data.model.SukiAccountSummary
 import com.storepos.app.data.model.ShopContext
 import com.storepos.app.ui.components.EmptyView
 import com.storepos.app.ui.components.LoadingView
@@ -25,6 +27,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun CustomersPage(context: ShopContext) {
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
+    var receivables by remember { mutableStateOf<List<CustomerReceivable>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    val canViewCredit = context.member.role.lowercase() in setOf("owner", "admin", "manager")
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var addCustomer by remember { mutableStateOf(false) }
@@ -33,6 +38,11 @@ fun CustomersPage(context: ShopContext) {
 
     suspend fun refresh() {
         customers = StoreRepository.customers(context.shop.id)
+        // Best-effort owner-only read; customer editing and loyalty remains usable
+        // even when receivables are unavailable or the shop is offline.
+        receivables = if (canViewCredit) {
+            runCatching { StoreRepository.receivables(context.shop.id) }.getOrDefault(emptyList())
+        } else emptyList()
     }
 
     LaunchedEffect(context.shop.id) {
@@ -60,6 +70,16 @@ fun CustomersPage(context: ShopContext) {
 
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
+        if (customers.isNotEmpty()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Find suki by name, phone or member ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         if (customers.isEmpty()) {
             EmptyView(
                 "No customers",
@@ -71,7 +91,14 @@ fun CustomersPage(context: ShopContext) {
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(customers, key = { it.id }) { customer ->
+                items(
+                    customers.filter { customer ->
+                        query.isBlank() || customer.name.contains(query, true) ||
+                            (customer.phone?.contains(query, true) == true) ||
+                            SukiAccountSummary.membershipReference(customer).contains(query, true)
+                    },
+                    key = { it.id }
+                ) { customer ->
                     MotoCard(Modifier.fillMaxWidth()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
@@ -82,10 +109,25 @@ fun CustomersPage(context: ShopContext) {
                                 )
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "Loyalty ${customer.loyaltyPoints} pts · Credit ${money(customer.storeCreditBalance)}",
+                                    SukiAccountSummary.membershipReference(customer),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "Loyalty ${customer.loyaltyPoints} pts · Prepaid credit ${money(customer.storeCreditBalance)}",
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.SemiBold
                                 )
+                                if (canViewCredit) {
+                                    val owed = SukiAccountSummary.outstanding(customer, receivables)
+                                    Text(
+                                        "Utang ${money(owed)} · Available credit ${money(SukiAccountSummary.availableCredit(customer, receivables))}",
+                                        color = if (owed > customer.creditLimit && customer.creditLimit > 0)
+                                            MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
                             }
                             TextButton(onClick = { rewardsCustomer = customer }) {
                                 Text("Rewards")

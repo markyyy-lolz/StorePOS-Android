@@ -144,6 +144,35 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             runCatching { json.decodeFromString<ReceiptFreebieRule>(it) }.getOrNull()
         }?.takeIf { it.shopId == shopId } ?: ReceiptFreebieRule(shopId)
 
+    /** Device-local recovery for UNPAID cart only; never queue as a transaction. */
+    fun saveCartDraft(shopId: String, cashierId: String, cart: List<CartLine>) {
+        val epoch = cachedCatalogEpoch(shopId) ?: return
+        if (cart.isEmpty()) {
+            clearCartDraft(shopId, cashierId)
+            return
+        }
+        val draft = CartDraftRecovery.snapshot(
+            shopId, cashierId, epoch, cart, System.currentTimeMillis()
+        )
+        putBlob("cart_draft:$shopId:$cashierId", json.encodeToString(draft))
+    }
+
+    fun loadCartDraft(shopId: String, cashierId: String): SafeCartDraft? {
+        val epoch = cachedCatalogEpoch(shopId) ?: return null
+        val draft = getBlob("cart_draft:$shopId:$cashierId")?.let {
+            runCatching { json.decodeFromString<SafeCartDraft>(it) }.getOrNull()
+        } ?: return null
+        return draft.takeIf {
+            CartDraftRecovery.eligible(it, shopId, cashierId, epoch, System.currentTimeMillis())
+        }
+    }
+
+    fun clearCartDraft(shopId: String, cashierId: String) {
+        writableDatabase.delete(
+            "cache_blob", "cache_key=?", arrayOf("cart_draft:$shopId:$cashierId")
+        )
+    }
+
     fun saveProducts(shopId: String, products: List<Product>) =
         putBlob("products:$shopId", json.encodeToString(products))
 

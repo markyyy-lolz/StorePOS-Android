@@ -118,6 +118,9 @@ fun RetailControlPage(context: ShopContext) {
     val pending = approvals.filter { it.status == "pending" }
     val walletIssues = reconciliations.count { kotlin.math.abs(it.variance) >= 0.01 }
     val issues = healthIssueCount(health)
+    val risk = if (manager) RetailRiskReview.calculate(
+        context.shop.id, reprints, approvals, reconciliations
+    ) else RetailRiskSignals(0, 0, 0)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -156,6 +159,29 @@ fun RetailControlPage(context: ShopContext) {
                 ControlMetric("Health", issues.toString(), "issue(s)", Modifier.weight(1f))
                 ControlMetric("Approvals", pending.size.toString(), "pending", Modifier.weight(1f))
                 ControlMetric("Wallet", walletIssues.toString(), "variance", Modifier.weight(1f))
+            }
+        }
+
+        if (manager) {
+            item {
+                MotoCard(Modifier.fillMaxWidth()) {
+                    Text("Cashier activity review signals", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text(
+                        "Indicators for a manager to review, NOT proof of fraud. " +
+                            "Data comes from StorePOS's existing approved audit/reconciliation records.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text("Repeated receipt reprints: ${risk.repeatedReceiptSales} sale(s)")
+                    Text("Rejected/denied approval requests: ${risk.deniedApprovals}")
+                    Text("Payment reconciliations with variance ≥ PHP 1.00: ${risk.paymentVarianceCount}")
+                    Text(
+                        if (risk.total == 0) "No configured review signals in currently loaded records."
+                        else "${risk.total} review signal(s) • Inspect approvals, reprints and reconciliation before taking action.",
+                        color = if (risk.total == 0) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 

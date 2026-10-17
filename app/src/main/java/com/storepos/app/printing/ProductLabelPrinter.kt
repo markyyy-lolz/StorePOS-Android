@@ -33,6 +33,36 @@ object ProductLabelPrinter {
         }
     }
 
+    /** Batched labels are printed in one connection, preserving the cut after each item. */
+    fun batchLabelBytes(products: List<Product>, copiesEach: Int, paperWidth: Int = 80): ByteArray {
+        require(products.isNotEmpty() && products.size <= 20)
+        require(copiesEach in 1..100 && products.size * copiesEach <= 100)
+        require(products.map { it.shopId }.distinct().size == 1) {
+            "Cannot print barcode labels belonging to different shops."
+        }
+        val output = ByteArrayOutputStream()
+        products.forEach { output.write(labelBytes(it, copiesEach, paperWidth)) }
+        return output.toByteArray()
+    }
+
+    suspend fun printConfiguredBatch(
+        context: Context, products: List<Product>, copiesEach: Int
+    ): Result<Unit> {
+        val prefs = context.getSharedPreferences("motopos_settings", 0)
+        val transport = prefs.getString("printer_transport", "bluetooth") ?: "bluetooth"
+        val address = prefs.getString("printer_address", null)
+            ?: return Result.failure(IllegalStateException("Configure a direct Bluetooth or USB label printer first."))
+        val name = prefs.getString("printer_name", "StorePOS printer") ?: "StorePOS printer"
+        val paperWidth = prefs.getInt("paper_width", 80)
+        val payload = batchLabelBytes(products, copiesEach, paperWidth)
+        val printer: ReceiptPrinter = if (transport == "usb") UsbReceiptPrinter(context)
+            else BluetoothReceiptPrinter(context)
+        return runCatching {
+            printer.connect(PrinterDevice(name, address, transport)).getOrThrow()
+            printer.printReceipt(payload).getOrThrow()
+        }.also { runCatching { printer.disconnect() } }
+    }
+
     fun labelBytes(product: Product, copies: Int, paperWidth: Int = 80): ByteArray {
         val charset = Charset.forName("CP437")
         val out = ByteArrayOutputStream()

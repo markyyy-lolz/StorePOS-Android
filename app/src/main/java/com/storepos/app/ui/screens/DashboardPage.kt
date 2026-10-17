@@ -17,10 +17,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.storepos.app.data.StoreRepository
+import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
 import kotlinx.coroutines.async
@@ -44,6 +46,10 @@ fun DashboardPage(
     onOpenQuotations: () -> Unit = {},
     onOpenOperations: () -> Unit = {}
 ) {
+    val androidContext = LocalContext.current
+    val offlineStore = remember { OfflineStore(androidContext) }
+    var remoteDevices by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
+    var deviceHealthLoaded by remember { mutableStateOf(false) }
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
     var sales by remember { mutableStateOf<List<Sale>>(emptyList()) }
     var jobs by remember { mutableStateOf<List<JobOrder>>(emptyList()) }
@@ -87,6 +93,11 @@ fun DashboardPage(
                 val counts = async {
                     if (hasCounts) runCatching { StoreRepository.inventoryCounts(context.shop.id) }.getOrDefault(emptyList()) else emptyList()
                 }
+                val health = async {
+                    if (role in setOf("owner", "admin")) {
+                        runCatching { StoreRepository.deviceSessions(context.shop.id) }.getOrNull()
+                    } else null
+                }
 
                 products = p.await()
                 sales = s.await()
@@ -96,6 +107,9 @@ fun DashboardPage(
                 receivables = recv.await()
                 reminders = rem.await()
                 inventoryCounts = counts.await()
+                val fetchedDevices = health.await()
+                remoteDevices = fetchedDevices.orEmpty().filter { it.shopId == context.shop.id }
+                deviceHealthLoaded = fetchedDevices != null
             }
         }.onFailure { error = StoreRepository.userMessage(it) }
         loading = false
@@ -185,6 +199,47 @@ fun DashboardPage(
                             repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
+                }
+            }
+        }
+
+        if (role in setOf("owner", "admin")) {
+            item {
+                MotoCard(Modifier.fillMaxWidth()) {
+                    Text("Remote StorePOS terminals", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    if (!deviceHealthLoaded) {
+                        Text("Device heartbeat data unavailable. Connect to StorePOS Cloud for status.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        val active = remoteDevices.filter { it.isActive }
+                        val recent = RemoteDeviceHeartbeat.recentCount(
+                            active, context.shop.id, System.currentTimeMillis()
+                        )
+                        Text("${recent} of ${active.size} enabled tablet(s) reported in the last 10 minutes")
+                        Text(
+                            "Last-seen is cloud heartbeat telemetry, not a guarantee of live connectivity. " +
+                                "Other tablets' unsynced SQLite cash sales cannot be viewed here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        active.take(8).forEach { device ->
+                            Text(
+                                (device.deviceName ?: device.deviceId.take(10)) +
+                                    " · Last seen: " + device.lastSeenAt.take(19).replace('T', ' '),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Text(
+                        "This tablet: " +
+                            offlineStore.pendingSales(context.shop.id).size +
+                            " cash sale(s) queued · " +
+                            offlineStore.needsReview(context.shop.id).size +
+                            " sale(s) requiring review · " +
+                            offlineStore.pendingInventory(context.shop.id).size +
+                            " inventory action(s) queued",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
