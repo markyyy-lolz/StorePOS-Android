@@ -7,6 +7,8 @@ import com.storepos.app.data.model.ReceiptFreebieRule
 import com.storepos.app.data.model.Sale
 import com.storepos.app.data.model.Shop
 import com.storepos.app.data.model.ShopSettings
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -76,4 +78,77 @@ class ReceiptFreebieTest {
         assertTrue(content.contains("OFF-"))
         assertFalse(content.contains("https://"))
     }
+    private fun cutPositions(bytes: ByteArray): List<Int> =
+        (0..bytes.size - 3).filter { i ->
+            bytes[i] == 0x1D.toByte() && bytes[i + 1] == 0x56.toByte() &&
+                bytes[i + 2] == 0x00.toByte()
+        }
+
+    @Test fun qualifyingReceiptHasTwoCutsAndPhysicalVoucherStartsAfterFirstCut() {
+        for (mm in listOf(58, 80)) {
+            val sale = Sale(
+                id = "sale", shopId = "s", saleNumber = "S-00001", cashierId = "cashier",
+                subtotal = 1600.0, discountAmount = 0.0, taxAmount = 0.0,
+                totalAmount = 1600.0, status = "completed"
+            )
+            val bytes = BluetoothReceiptPrinter.saleReceipt(
+                shopName = shop.name, sale = sale, cart = cart, paperWidth = mm,
+                receiptFreebieRule = rule, footerFeedLines = 3
+            )
+            val cuts = cutPositions(bytes)
+            assertEquals("Main receipt and separate voucher each get a full cutter", 2, cuts.size)
+            val mainPaper = String(bytes.copyOfRange(0, cuts[0]), Charsets.ISO_8859_1)
+            val voucher = String(bytes.copyOfRange(cuts[0] + 3, bytes.size), Charsets.ISO_8859_1)
+            assertTrue(mainPaper.contains("Groceries"))
+            assertTrue(mainPaper.contains(PosSupplierFooter.PHONE))
+            assertFalse(mainPaper.contains("FREE ITEM CLAIM SLIP"))
+            assertFalse(mainPaper.contains("FREE ITEM REWARD"))
+            assertTrue(voucher.contains("FREE ITEM CLAIM SLIP"))
+            assertTrue(voucher.contains("Free Rice 1kg"))
+            assertTrue(voucher.contains("Sale Ref: S-00001"))
+            assertFalse(voucher.contains("Groceries"))
+            assertArrayEquals(
+                ReceiptCutSettings.extraFeedAndFullCut(3),
+                bytes.copyOfRange(bytes.size - 6, bytes.size)
+            )
+            val decoded = ThermalReceiptDecoder.decode(bytes)
+            assertEquals(1, decoded.count { it is ThermalReceiptElement.Cut })
+            val beforeCut = decoded.takeWhile { it !is ThermalReceiptElement.Cut }
+            val afterCut = decoded.dropWhile { it !is ThermalReceiptElement.Cut }.drop(1)
+            assertTrue(beforeCut.any { it is ThermalReceiptElement.Text && it.line.contains("Groceries") })
+            assertTrue(afterCut.any { it is ThermalReceiptElement.Text && it.line.contains("FREE ITEM CLAIM SLIP") })
+        }
+    }
+
+    @Test fun receiptBelowThresholdOrDisabledAlwaysHasSingleOriginalFullCut() {
+        for (configured in listOf(rule.copy(enabled = false), rule.copy(minimumTotal = 2000.0))) {
+            val sale = Sale(
+                id = "sale", shopId = "s", saleNumber = "S-00001", cashierId = "cashier",
+                subtotal = 1600.0, discountAmount = 0.0, taxAmount = 0.0,
+                totalAmount = 1600.0, status = "completed"
+            )
+            val bytes = BluetoothReceiptPrinter.saleReceipt(
+                shop.name, sale, cart, paperWidth = 80, receiptFreebieRule = configured
+            )
+            assertEquals(1, cutPositions(bytes).size)
+            assertFalse(String(bytes, Charsets.ISO_8859_1).contains("FREE ITEM CLAIM SLIP"))
+            assertEquals(0, ThermalReceiptDecoder.decode(bytes).count { it is ThermalReceiptElement.Cut })
+        }
+    }
+
+    @Test fun offlineClaimSlipKeepsProvisionalSaleIdAndBothCuts() {
+        val receipt = OfflineReceiptFormatter.create(
+            shop = shop, settings = settings,
+            clientKey = "0f5ac002-abcd-4321-9876-eeee00001111",
+            cashierId = "cashier", cart = cart,
+            payments = listOf(CheckoutPayment(method = "cash", amount = 1600.0)),
+            discount = 0.0, tax = 0.0, paperWidth = 80,
+            cashierLabel = null, receiptFreebieRule = rule
+        )
+        assertEquals(2, cutPositions(receipt.thermalBytes).size)
+        val text = String(receipt.thermalBytes, Charsets.ISO_8859_1)
+        assertTrue(text.contains("OFFLINE - PENDING SYNC"))
+        assertTrue(text.contains("Sale Ref: OFF-0F5AC002ABCD"))
+    }
+
 }
