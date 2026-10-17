@@ -40,6 +40,8 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.SafeCartDraft
+import com.storepos.app.data.local.CartDraftRecovery
 import com.storepos.app.data.local.productsWithQueuedCashSales
 import com.storepos.app.data.local.HybridConnectivity
 import com.storepos.app.data.local.OfflineSyncPolicy
@@ -166,6 +168,23 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         prefs.getBoolean("training_mode_" + context.shop.id, false)
     }
     val offlineStore = remember { OfflineStore(androidContext) }
+    var pendingCartDraft by remember(context.shop.id, context.userId) {
+        mutableStateOf<SafeCartDraft?>(offlineStore.loadCartDraft(context.shop.id, context.userId))
+    }
+    var expressCheckout by remember(context.shop.id, context.userId) {
+        mutableStateOf(
+            prefs.getBoolean("express_checkout_${context.shop.id}_${context.userId}", false)
+        )
+    }
+
+    // Keep unpaid cart only. No payment, final sale, coupon, stock or saved receipt is
+    // ever restored from this draft. All completed sales clear it immediately.
+    LaunchedEffect(cart, pendingCartDraft, trainingMode, context.shop.id, context.userId) {
+        if (!trainingMode && pendingCartDraft == null) {
+            runCatching { offlineStore.saveCartDraft(context.shop.id, context.userId, cart) }
+                .onFailure { error = "Unable to save crash-recovery cart: " + (it.message ?: "Storage error") }
+        }
+    }
     var receiptFreebieRule by remember(context.shop.id) {
         mutableStateOf(offlineStore.loadReceiptFreebieRule(context.shop.id))
     }
@@ -706,6 +725,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptFreebieRule = receiptFreebieRule
                         lastSaleTraining = false
                         receiptPrintedOnce = false
+                        offlineStore.clearCartDraft(context.shop.id, context.userId)
                         cart = emptyList()
                         pendingPayMongo = null
                         paymongoFinalizeError = null
@@ -743,14 +763,20 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     if (loading) return LoadingView("Opening POS…")
 
+    val favoriteProducts = retailFavorites.mapNotNull { favorite -> products.firstOrNull { it.id == favorite.productId && it.isActive } }
+    val favoriteIds = favoriteProducts.map { it.id }.toSet()
     val visible = products.filter {
         it.isActive && (query.isBlank() ||
             it.name.contains(query, true) ||
             it.sku.contains(query, true) ||
             it.barcode?.contains(query, true) == true ||
             it.brand?.contains(query, true) == true)
+    }.let { found ->
+        if (expressCheckout) found.sortedWith(
+            compareByDescending<Product> { it.id in favoriteIds }
+                .thenBy { it.name.lowercase() }
+        ) else found
     }
-    val favoriteProducts = retailFavorites.mapNotNull { favorite -> products.firstOrNull { it.id == favorite.productId && it.isActive } }
     val openShift = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
     val cachedOpenShift = prefs.getString("open_shift_" + context.shop.id, null)
     val registerOpen = trainingMode ||
@@ -787,6 +813,18 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         Spacer(Modifier.width(4.dp))
                         Text(if (customerDisplayEnabled) "Display on" else "Customer display")
                     }
+                    FilterChip(
+                        selected = expressCheckout,
+                        onClick = {
+                            expressCheckout = !expressCheckout
+                            prefs.edit().putBoolean(
+                                "express_checkout_${context.shop.id}_${context.userId}",
+                                expressCheckout
+                            ).apply()
+                        },
+                        label = { Text(if (expressCheckout) "EXPRESS ON" else "Express checkout") },
+                        leadingIcon = { Icon(Icons.Rounded.Bolt, contentDescription = null) }
+                    )
                     if (offlineMode) {
                         AssistChip(onClick = {}, label = { Text("OFFLINE") })
                     } else {
@@ -883,6 +921,29 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             "Checkout is simulated locally. Inventory, sales, cash drawer and reports will not change.",
                             style = MaterialTheme.typography.bodySmall
                         )
+                    }
+                }
+            }
+        }
+
+        if (expressCheckout && cart.isNotEmpty()) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Rounded.Bolt, contentDescription = null)
+                    Column(Modifier.weight(1f)) {
+                        Text("EXPRESS • ${cart.sumOf { it.quantity }.toInt()} item(s)", fontWeight = FontWeight.Bold)
+                        Text(money(cart.sumOf { it.lineTotal }), fontWeight = FontWeight.Black)
+                    }
+                    Button(onClick = { beginCheckout() }, enabled = registerOpen && !preparingCheckout) {
+                        Text("Checkout")
                     }
                 }
             }
@@ -1020,6 +1081,60 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         }
     }
 
+    pendingCartDraft?.let { draft ->
+        if (!loading && products.isNotEmpty() && !trainingMode) {
+            val eligible = CartDraftRecovery.eligible(
+                draft, context.shop.id, context.userId,
+                offlineStore.cachedCatalogEpoch(context.shop.id).orEmpty(),
+                System.currentTimeMillis()
+            )
+            val restored = if (eligible) CartDraftRecovery.restore(draft, products) else emptyList()
+            AlertDialog(
+                onDismissRequest = {
+                    offlineStore.clearCartDraft(context.shop.id, context.userId)
+                    pendingCartDraft = null
+                },
+                icon = { Icon(Icons.Rounded.Restore, null) },
+                title = { Text("Recover unpaid cart?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "Found ${draft.items.size} item(s) from a previous interrupted session. " +
+                                "No previous payment or completed sale will be recreated."
+                        )
+                        Text(
+                            "Current prices and stock will be rechecked at checkout. " +
+                                "Manual price overrides and serial allocations are NOT recovered.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (restored.size < draft.items.size) {
+                            Text(
+                                "Some products are missing or inactive in the current catalog. " +
+                                    "Only ${restored.size} can be restored.",
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = restored.isNotEmpty() && cart.isEmpty(),
+                        onClick = {
+                            cart = restored
+                            pendingCartDraft = null
+                        }
+                    ) { Text("Restore unpaid cart") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        offlineStore.clearCartDraft(context.shop.id, context.userId)
+                        pendingCartDraft = null
+                    }) { Text("Discard draft") }
+                }
+            )
+        }
+    }
+
     quantityProduct?.let { product ->
         QuantityEntryDialog(
             product = product,
@@ -1150,6 +1265,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             notes = notes
                         )
                     }.onSuccess {
+                        offlineStore.clearCartDraft(context.shop.id, context.userId)
                         cart = emptyList()
                         holdOpen = false
                         refresh()
@@ -1822,6 +1938,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastSaleTraining = true
                         receiptPrintedOnce = false
                         printMessage = "Training transaction only • nothing was saved to StorePOS Cloud."
+                        offlineStore.clearCartDraft(context.shop.id, context.userId)
                         cart = emptyList()
                         checkout = false
                         return@launch
@@ -1928,6 +2045,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptFreebieRule = receiptFreebieRule
                         lastSaleTraining = false
                         receiptPrintedOnce = false
+                        offlineStore.clearCartDraft(context.shop.id, context.userId)
                         cart = emptyList()
                         checkout = false
                         refresh()
@@ -2062,7 +2180,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                 )
                                 printing = false
                             }
-                            cart = emptyList()
+                            offlineStore.clearCartDraft(context.shop.id, context.userId)
+                        cart = emptyList()
                             checkout = false
                             offlineMode = true
                             error = null
