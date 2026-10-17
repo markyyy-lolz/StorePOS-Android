@@ -40,6 +40,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.productsWithQueuedCashSales
 import com.storepos.app.data.local.HybridConnectivity
 import com.storepos.app.data.local.OfflineSyncPolicy
 import com.storepos.app.data.local.OfflineSaleSynchronizer
@@ -62,6 +63,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.text.DateFormat
+import java.util.Date
 import java.util.UUID
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -151,6 +154,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var pendingCount by remember { mutableStateOf(0) }
     var needsReviewCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
+    var syncingProducts by remember { mutableStateOf(false) }
+    var catalogCloudSyncedAt by remember(context.shop.id) { mutableStateOf<Long?>(null) }
 
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
@@ -293,28 +298,44 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         )
     }
 
+    /**
+     * This catalog download is independent of shift/settings/customer endpoints:
+     * a failed optional endpoint must not prevent the full trusted SQLite snapshot
+     * from being saved. Keep all v1.8.6 cloud-epoch/inventory safeguards intact.
+     */
+    suspend fun refreshCatalog() {
+        if (!HybridConnectivity.hasInternet(androidContext)) {
+            throw java.io.IOException("Internet unavailable; using trusted local products.")
+        }
+        // Never discard offline inventory changes still waiting for confirmation.
+        if (offlineStore.pendingInventory(context.shop.id).isNotEmpty()) {
+            runCatching { OfflineInventorySynchronizer.syncShop(context.shop.id, offlineStore) }
+        }
+        check(offlineStore.pendingInventory(context.shop.id).isEmpty() &&
+            offlineStore.needsReviewInventory(context.shop.id).isEmpty()) {
+            "Offline inventory requires synchronization or manager review before catalog replacement."
+        }
+        val before = StoreRepository.hybridCatalogEpoch(context.shop.id)
+        val downloaded = StoreRepository.products(context.shop.id)
+        val after = StoreRepository.hybridCatalogEpoch(context.shop.id)
+        check(before == after) {
+            "Cloud catalog changed during download. Retry while connected."
+        }
+        val safeView = productsWithQueuedCashSales(
+            downloaded,
+            offlineStore.pendingSales(context.shop.id) + offlineStore.needsReview(context.shop.id),
+            context.shop.id,
+            after
+        )
+        offlineStore.saveTrustedProducts(context.shop.id, safeView, after)
+        products = safeView
+        catalogCloudSyncedAt = offlineStore.productsCloudSyncedAt(context.shop.id)
+    }
+
     suspend fun refresh() {
         try {
-            if (!HybridConnectivity.hasInternet(androidContext)) {
-                throw java.io.IOException("Internet unavailable; using the previously trusted local product catalog.")
-            }
-            // Do not overwrite the local optimistic product cache while
-            // another offline inventory operation is waiting or rejected.
-            // This matters if the POS and Inventory screens share this tablet.
-            if (offlineStore.pendingInventory(context.shop.id).isNotEmpty()) {
-                runCatching {
-                    OfflineInventorySynchronizer.syncShop(context.shop.id,offlineStore)
-                }
-            }
-            if (offlineStore.pendingInventory(context.shop.id).isNotEmpty() ||
-                offlineStore.needsReviewInventory(context.shop.id).isNotEmpty()) {
-                throw IllegalStateException(
-                    "Offline inventory needs cloud sync or manager review before replacing the cached catalog."
-                )
-            }
-            val epochBefore = StoreRepository.hybridCatalogEpoch(context.shop.id)
+            refreshCatalog()
             coroutineScope {
-                val p = async { StoreRepository.products(context.shop.id) }
                 val c = async { StoreRepository.customers(context.shop.id) }
                 val m = async { StoreRepository.motorcycles(context.shop.id) }
                 val s = async { StoreRepository.shopSettings(context.shop.id) }
@@ -323,7 +344,6 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 val rs = async { RetailRepository.serials(context.shop.id) }
                 val rp = async { RetailRepository.promos(context.shop.id) }
                 val rf = async { RetailRepository.favorites(context.shop.id) }
-                products = p.await()
                 customers = c.await()
                 motorcycles = m.await()
                 settings = s.await()
@@ -333,13 +353,6 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 retailPromos = rp.await()
                 retailFavorites = rf.await()
             }
-            // Take an epoch snapshot on BOTH sides of the catalog download.
-            // Never trust a half-refreshed cache if products reset during fetch.
-            val epochAfter = StoreRepository.hybridCatalogEpoch(context.shop.id)
-            check(epochBefore == epochAfter) {
-                "Catalog changed during cloud refresh. Retry while online."
-            }
-            offlineStore.saveTrustedProducts(context.shop.id, products, epochAfter)
             offlineStore.saveCustomers(context.shop.id, customers)
             offlineStore.saveMotorcycles(context.shop.id, motorcycles)
 
@@ -353,6 +366,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             products = offlineStore.loadProducts(context.shop.id)
             customers = offlineStore.loadCustomers(context.shop.id)
             motorcycles = offlineStore.loadMotorcycles(context.shop.id)
+            catalogCloudSyncedAt = offlineStore.productsCloudSyncedAt(context.shop.id)
             offlineMode = true
             if (products.isEmpty()) throw cloudError
         }
@@ -572,6 +586,17 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     LaunchedEffect(context.shop.id) {
         OfflineSyncWorker.schedule(androidContext, context.shop.id)
+        // Display the last trusted shop catalog immediately, even without internet.
+        if (offlineStore.isProductCacheTrusted(context.shop.id)) {
+            products = offlineStore.loadProducts(context.shop.id)
+            customers = offlineStore.loadCustomers(context.shop.id)
+            motorcycles = offlineStore.loadMotorcycles(context.shop.id)
+            catalogCloudSyncedAt = offlineStore.productsCloudSyncedAt(context.shop.id)
+            pendingCount = offlineStore.pendingSales(context.shop.id).size
+            needsReviewCount = offlineStore.needsReview(context.shop.id).size
+            offlineMode = true
+            loading = false
+        }
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
@@ -585,6 +610,18 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             if (pendingCount > 0 && !syncingOffline) {
                 runCatching { syncOfflineSales() }
             } else if (offlineMode && pendingCount == 0) {
+                runCatching { refresh() }
+            }
+        }
+    }
+
+    LaunchedEffect(context.shop.id) {
+        // Refresh cloud-origin products regularly without disrupting a live basket.
+        while (true) {
+            delay(120_000)
+            if (cart.isEmpty() && !checkout && !preparingCheckout &&
+                pendingPayMongo == null && !syncingOffline && !syncingProducts &&
+                HybridConnectivity.hasInternet(androidContext)) {
                 runCatching { refresh() }
             }
         }
@@ -779,6 +816,39 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         )
 
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Products saved in SQLite: " + products.size +
+                    (catalogCloudSyncedAt?.let {
+                        " • Cloud sync: " + DateFormat.getDateTimeInstance(
+                            DateFormat.SHORT, DateFormat.SHORT
+                        ).format(Date(it))
+                    } ?: " • No completed cloud sync"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                enabled = !syncingProducts && !syncingOffline && !checkout,
+                onClick = {
+                    scope.launch {
+                        syncingProducts = true
+                        runCatching { refresh() }
+                            .onSuccess { error = null }
+                            .onFailure { error = StoreRepository.userMessage(it) }
+                        syncingProducts = false
+                    }
+                }
+            ) {
+                Icon(Icons.Rounded.Sync, contentDescription = null)
+                Spacer(Modifier.width(3.dp))
+                Text(if (syncingProducts) "Syncing…" else "Sync Products")
+            }
+        }
 
         if (trainingMode) {
             Surface(
