@@ -1,25 +1,32 @@
-# StorePOS Android v1.7.4 — Adjustable Receipt Footer-to-Cut Spacing
+# StorePOS Android v1.7.5 — Offline Cloud Product Catalog
 
-The VOZY G80 receipt auto-cut can now be moved closer to or farther from the final **Powered by StorePOS** footer without changing the business content or default full-cut command.
+StorePOS now saves the entire StorePOS shop's Supabase product catalog to on-device SQLite, so cashiers can browse products, scan barcodes, and prepare supported cash checkouts when the internet is unavailable.
 
 ## What's new
-- **Settings → Receipt printer → Footer-to-Cut Spacing**: integer slider from **0 through 8 extra blank lines**. Default **2**, matching previous sales receipts. Setting saves automatically on the tablet.
-- **Test print** reflects your currently selected spacing and ends with the actual StorePOS footer, so you can check where the physical cutter lands before selling.
-- **POS sale receipts** embed the chosen spacing in the ESC/POS bytes. Works with both direct Bluetooth/USB and shared two-tablet VOZY G80 printer queues.
-- **Shared queue test prints**, **X Reading**, **Z Reading**, and batch sales reports respect the saved line spacing.
-- Existing 80mm / 58mm settings, automatic full cut, scanner, PDF rendering, sales, and payments remain unchanged.
+- **Cloud to SQLite catalog sync:** downloads all products for the active shop, in pages of 500 to support grocery stores with more than 1,000 products.
+- **Instant offline catalog:** previously synced products, names, SKUs, barcodes, prices, and stock are loaded immediately from SQLite when opening POS, without waiting for Supabase.
+- **Resilient synchronization:** catalog caching succeeds independently of optional requests such as shift, promotions, settings, and customers. Partial cloud catalog fetches do not replace the saved full snapshot.
+- **Reconnect automatically:** retries the cloud product download every two minutes while POS is open and supports manual **Sync Products**.
+- **Local cache indicators:** POS shows how many products are saved locally and the last successful cloud sync time.
+- **Pending sale stock:** a fresh cloud catalog is adjusted for sales still queued on this device, so the displayed available quantity does not prematurely increase.
+- **Shop-specific caching:** each shop reads its own product snapshot and pending sale queue.
 
-## Set up on Samsung Galaxy Tab A9+ 5G
-1. Install v1.7.4 over your existing StorePOS. Don't uninstall or clear app data.
-2. Go to **Settings → Receipt printer**. Adjust **Footer-to-Cut Spacing** to **2 extra lines** first.
-3. With your VOZY G80 connected, choose **Test print**. The cutter should act after the final "Powered by StorePOS" line.
-4. If text is too close to the cut, increase to **3–4**. If too much blank paper, reduce to **1**, retest. **0** could cut too close to the text due to printer hardware offset.
-5. The setting is **per tablet** and is embedded in newly generated print jobs. Jobs already queued use their original spacing. On two cashiers, configure each if you need identical output.
-6. Use existing sale receipt **reprint** only if you need it. Never repeat checkout to test paper cut.
+## Before going offline
+1. On **each** Samsung tablet, install StorePOS v1.7.5 over the installed app. **Do not uninstall or clear storage.**
+2. Sign in while connected to the internet; open Point of Sale and tap **Sync Products**.
+3. Check **Saved locally: [number] products** and confirm the **Last cloud sync** indicator.
+4. Switch off Wi-Fi/mobile data and reopen the POS; check barcode lookup, product search, prices, and supported cash checkout.
+5. Restore internet. Confirm products refresh and queued offline sales are synced exactly once.
+
+## Operational limits and safety
+- The **first** product sync must succeed online on each device; an uninitialized tablet cannot load an offline catalog.
+- Cashier accounts, authorization/licensing, and any device policies must already permit POS access; cached products alone do not guarantee offline sign-in.
+- Supported basic cash checkout can queue offline; weighted products, retail packs, batch/serial tracking, promotions, online payment methods and other special transactions may still require cloud connectivity.
+- When **two tablets** sell offline, displayed stock is a local estimate until both devices sync. Review cross-device stock consistency after recovery.
+- Never uninstall the app or clear its data while offline sales remain unsynced.
+- SQLite data is still held inside the app's existing `motopos_offline.db` file for backward compatibility; the catalog is logically scoped to the StorePOS shop.
+- This is a StorePOS Android application-only update; no cloud schema mutation, no StorePOS historical sales deletion, and no MotoPOS data modification.
 
 ## Verification
-- Unit tests cover line spacing normalization, exact ESC/POS full-cut bytes, direct receipt footer location, shared queue test byte identity and X report footer.
-- GitHub Android CI must pass before distributing an APK.
-- Hardware cut position depends on the VOZY G80 printer mechanism; physical testing is required.
-
-No Supabase schema changes, PayMongo changes or MotoPOS record changes.
+- GitHub Android CI passes unit tests, Android lint, and debug APK build on the feature branch.
+- Device-to-cloud full catalog refresh, physical Bluetooth scanner and printer, offline recovery with multiple tablets, and production Supabase RLS behavior still require real-device acceptance testing.
