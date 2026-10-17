@@ -26,6 +26,7 @@ import com.storepos.app.data.model.Product
 import com.storepos.app.data.model.Sale
 import com.storepos.app.data.model.Shop
 import com.storepos.app.data.model.ShopSettings
+import com.storepos.app.data.model.ReceiptFreebieRule
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -56,7 +57,8 @@ object ReceiptPdfExporter {
         payments: List<CheckoutPayment> = emptyList(),
         cashierLabel: String? = null,
         digitalReceiptUrl: String? = null,
-        paperWidth: Int = settings.printerPaperWidthMm
+        paperWidth: Int = settings.printerPaperWidthMm,
+        receiptFreebieRule: ReceiptFreebieRule? = null
     ): ByteArray {
         require(lines.isNotEmpty()) { "Cannot export a PDF without the original sale items." }
         require(sale.shopId == shop.id) { "Receipt does not belong to this store." }
@@ -102,7 +104,8 @@ object ReceiptPdfExporter {
             showPaymentReference = settings.receiptShowPaymentReference,
             showDigitalQr = settings.receiptShowDigitalQr,
             compactMode = settings.receiptCompactMode,
-            sectionOrder = settings.receiptSectionOrder
+            sectionOrder = settings.receiptSectionOrder,
+            receiptFreebieRule = receiptFreebieRule
         )
         return renderThermalBytes(samePrinterBytes, paperWidth)
     }
