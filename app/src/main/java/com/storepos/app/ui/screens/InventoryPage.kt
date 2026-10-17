@@ -215,7 +215,7 @@ fun InventoryPage(context: ShopContext) {
                                         !it.serialTracked && it.retailParentId == null
                                 } >= 2
                         ) {
-                            Icon(Icons.Rounded.Inventory, null)
+                            Icon(Icons.Rounded.Inventory2, null)
                             Spacer(Modifier.width(6.dp))
                             Text("Repack")
                         }
