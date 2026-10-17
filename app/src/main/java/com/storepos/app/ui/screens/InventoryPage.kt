@@ -45,6 +45,7 @@ import com.storepos.app.data.model.ProductInsert
 import com.storepos.app.data.model.ProductCategory
 import com.storepos.app.data.model.ProductCategoryInsert
 import com.storepos.app.data.model.ShopContext
+import com.storepos.app.data.StoreRepackRepository
 import com.storepos.app.data.model.InventoryCount
 import com.storepos.app.data.model.InventoryCountItem
 import com.storepos.app.printing.ProductLabelPrinter
@@ -86,6 +87,8 @@ fun InventoryPage(context: ShopContext) {
     var addOpen by remember { mutableStateOf(false) }
     var categoryManagerOpen by remember { mutableStateOf(false) }
     var labelCenterOpen by remember { mutableStateOf(false) }
+    var repackOpen by remember { mutableStateOf(false) }
+    var repackSaving by remember { mutableStateOf(false) }
     var editProduct by remember { mutableStateOf<Product?>(null) }
     var stockProduct by remember { mutableStateOf<Product?>(null) }
     var counts by remember { mutableStateOf<List<InventoryCount>>(emptyList()) }
@@ -200,6 +203,22 @@ fun InventoryPage(context: ShopContext) {
                         Icon(Icons.Rounded.Category, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Categories")
+                    }
+                    if (inventoryManager) {
+                        OutlinedButton(
+                            onClick = { repackOpen = true },
+                            enabled = !offlineMode && pendingInventory == 0 && reviewInventory == 0 &&
+                                offlineStore.pendingSales(context.shop.id).isEmpty() &&
+                                offlineStore.needsReview(context.shop.id).isEmpty() &&
+                                products.count {
+                                    it.isActive && it.trackStock && !it.batchTracked &&
+                                        !it.serialTracked && it.retailParentId == null
+                                } >= 2
+                        ) {
+                            Icon(Icons.Rounded.Inventory, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Repack")
+                        }
                     }
                     OutlinedButton(
                         onClick = { labelCenterOpen = true },
@@ -402,6 +421,37 @@ fun InventoryPage(context: ShopContext) {
                         if(!offlineMode) runCatching { refresh() }
                     }.onSuccess { editProduct=null }
                         .onFailure { error = StoreRepository.userMessage(it) }
+                }
+            }
+        )
+    }
+
+    if (repackOpen && inventoryManager) {
+        InventoryRepackDialog(
+            products = products,
+            saving = repackSaving,
+            onDismiss = { repackOpen = false },
+            onConfirm = { sourceId, targetId, sourceQty, targetQty, requestId ->
+                repackSaving = true
+                scope.launch {
+                    runCatching {
+                        check(!offlineMode && pendingInventory == 0 && reviewInventory == 0 &&
+                            offlineStore.pendingSales(context.shop.id).isEmpty() &&
+                            offlineStore.needsReview(context.shop.id).isEmpty()) {
+                            "Sync pending sales and stock changes before repacking."
+                        }
+                        StoreRepackRepository.repack(
+                            context.shop.id, sourceId, targetId, sourceQty, targetQty, requestId
+                        )
+                    }.onSuccess {
+                        repackOpen = false
+                        runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
+                    }.onFailure {
+                        error = "Repacking not confirmed. Do not repeat with a new request ID " +
+                            "until you verify the cloud inventory movement and audit trail: " +
+                            StoreRepository.userMessage(it)
+                    }
+                    repackSaving = false
                 }
             }
         )
