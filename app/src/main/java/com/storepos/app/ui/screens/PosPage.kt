@@ -136,6 +136,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
     var lastReceiptToken by remember { mutableStateOf<String?>(null) }
+    // Freeze this sale's offer so PDF/reprint never picks up a later threshold change.
+    var lastReceiptFreebieRule by remember { mutableStateOf<ReceiptFreebieRule?>(null) }
     var receiptPrintedOnce by remember { mutableStateOf(false) }
     var printing by remember { mutableStateOf(false) }
     var printMessage by remember { mutableStateOf<String?>(null) }
@@ -207,7 +209,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                 "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
             },
             paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm),
-            receiptFreebieRule = receiptFreebieRule
+            receiptFreebieRule = lastReceiptFreebieRule
         )
 
     val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
@@ -511,7 +513,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             paperWidth = paperWidth,
             receiptHeader = settings.receiptHeader,
             receiptFooter = settings.receiptFooter,
-            receiptFreebieRule = receiptFreebieRule,
+            receiptFreebieRule = lastReceiptFreebieRule,
             payments = payments,
             cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
             openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
@@ -701,6 +703,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = pending.receiptCart
                         lastPayments = listOf(verifiedPayment)
                         lastSale = result.sale
+                        lastReceiptFreebieRule = receiptFreebieRule
                         lastSaleTraining = false
                         receiptPrintedOnce = false
                         cart = emptyList()
@@ -1276,6 +1279,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     lastReceiptCart = emptyList()
                     lastPayments = emptyList()
                     lastReceiptToken = null
+                    lastReceiptFreebieRule = null
                     receiptPrintedOnce = false
                     printMessage = null
                 }
@@ -1814,6 +1818,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = trainingSale
+                        lastReceiptFreebieRule = null
                         lastSaleTraining = true
                         receiptPrintedOnce = false
                         printMessage = "Training transaction only • nothing was saved to StorePOS Cloud."
@@ -1920,6 +1925,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = sale
+                        lastReceiptFreebieRule = receiptFreebieRule
                         lastSaleTraining = false
                         receiptPrintedOnce = false
                         cart = emptyList()
