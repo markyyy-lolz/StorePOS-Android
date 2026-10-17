@@ -9,6 +9,7 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.Json
@@ -368,10 +369,30 @@ object StoreRepository {
         client.from("shop_settings").upsert(settings)
     }
 
-    suspend fun products(shopId: String): List<Product> =
-        client.from("products").select {
-            filter { eq("shop_id", shopId) }
-        }.decodeList<Product>().sortedBy { it.name.lowercase() }
+    /**
+     * Download the complete store catalog. PostgREST projects commonly enforce a 1,000
+     * row response cap, so a single select would silently omit grocery products.
+     * Never publish a partial page as a complete offline snapshot if any request fails.
+     */
+    suspend fun products(shopId: String): List<Product> {
+        val pageSize = 500
+        val all = mutableListOf<Product>()
+        var offset = 0
+        while (true) {
+            val page = client.from("products").select {
+                filter { eq("shop_id", shopId) }
+                order(column = "id", order = Order.ASCENDING)
+                range(offset.toLong()..(offset + pageSize - 1).toLong())
+            }.decodeList<Product>()
+            require(page.all { it.shopId == shopId }) {
+                "Cloud returned products from a different StorePOS shop."
+            }
+            all.addAll(page)
+            if (page.size < pageSize) break
+            offset += page.size
+        }
+        return all.distinctBy { it.id }.sortedBy { it.name.lowercase() }
+    }
 
     suspend fun addProduct(input: ProductInsert): Product {
         val openingStock = input.stockQuantity

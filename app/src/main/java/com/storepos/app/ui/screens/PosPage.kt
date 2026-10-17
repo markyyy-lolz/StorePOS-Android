@@ -40,6 +40,7 @@ import com.storepos.app.data.RetailRepository
 import com.storepos.app.data.PayMongoRepository
 import com.storepos.app.data.RetailOpsRepository
 import com.storepos.app.data.local.OfflineStore
+import com.storepos.app.data.local.productsWithPendingOfflineSales
 import com.storepos.app.display.CustomerDisplayController
 import com.storepos.app.data.model.*
 import com.storepos.app.ui.components.*
@@ -52,9 +53,12 @@ import com.storepos.app.printing.ReceiptPrinter
 import com.storepos.app.printing.UsbReceiptPrinter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.text.DateFormat
+import java.util.Date
 import java.util.UUID
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -135,6 +139,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var offlineQueued by remember { mutableStateOf<Double?>(null) }
     var pendingCount by remember { mutableStateOf(0) }
     var syncingOffline by remember { mutableStateOf(false) }
+    var syncingProducts by remember { mutableStateOf(false) }
+    var catalogLastSyncedAt by remember(context.shop.id) { mutableStateOf<Long?>(null) }
 
     val scope = rememberCoroutineScope()
     val androidContext = LocalContext.current
@@ -271,44 +277,70 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         )
     }
 
-    suspend fun refresh() {
-        try {
-            coroutineScope {
-                val p = async { StoreRepository.products(context.shop.id) }
-                val c = async { StoreRepository.customers(context.shop.id) }
-                val m = async { StoreRepository.motorcycles(context.shop.id) }
-                val s = async { StoreRepository.shopSettings(context.shop.id) }
-                val sh = async { StoreRepository.cashierShifts(context.shop.id) }
-                val h = async { StoreRepository.heldSales(context.shop.id) }
-                val rs = async { RetailRepository.serials(context.shop.id) }
-                val rp = async { RetailRepository.promos(context.shop.id) }
-                val rf = async { RetailRepository.favorites(context.shop.id) }
-                products = p.await()
-                customers = c.await()
-                motorcycles = m.await()
-                settings = s.await()
-                shifts = sh.await()
-                heldSales = h.await()
-                retailSerials = rs.await()
-                retailPromos = rp.await()
-                retailFavorites = rf.await()
-            }
-            offlineStore.saveProducts(context.shop.id, products)
-            offlineStore.saveCustomers(context.shop.id, customers)
-            offlineStore.saveMotorcycles(context.shop.id, motorcycles)
+    /**
+     * Catalog sync is independent of settings, customer and reporting requests.
+     * Only a fully downloaded store catalog replaces the SQLite snapshot.
+     */
+    suspend fun refreshCatalog() {
+        val downloaded = StoreRepository.products(context.shop.id)
+        val localView = productsWithPendingOfflineSales(
+            cloudProducts = downloaded,
+            pending = offlineStore.pendingSales(),
+            shopId = context.shop.id
+        )
+        offlineStore.saveProducts(context.shop.id, localView)
+        offlineStore.markProductsCloudSynced(context.shop.id)
+        products = localView
+        catalogLastSyncedAt = offlineStore.productsCloudSyncedAt(context.shop.id)
+        offlineMode = false
+    }
 
-            val open = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
-            prefs.edit().apply {
-                if (open != null) putString("open_shift_" + context.shop.id, open.id)
-                else remove("open_shift_" + context.shop.id)
-            }.apply()
-            offlineMode = false
-        } catch (cloudError: Throwable) {
+    suspend fun refresh() {
+        val catalogResult = runCatching { refreshCatalog() }
+        if (catalogResult.isFailure) {
+            // Cached products are usable without any cloud connection, including
+            // when this device opens POS for the first time after going offline.
+            if (!offlineStore.hasProductSnapshot(context.shop.id)) {
+                throw (catalogResult.exceptionOrNull()
+                    ?: IllegalStateException("No local product catalog is available."))
+            }
             products = offlineStore.loadProducts(context.shop.id)
             customers = offlineStore.loadCustomers(context.shop.id)
             motorcycles = offlineStore.loadMotorcycles(context.shop.id)
+            catalogLastSyncedAt = offlineStore.productsCloudSyncedAt(context.shop.id)
             offlineMode = true
-            if (products.isEmpty()) throw cloudError
+        } else {
+            // Optional cloud endpoints cannot prevent products from being cached.
+            supervisorScope {
+                val c = async { runCatching { StoreRepository.customers(context.shop.id) } }
+                val m = async { runCatching { StoreRepository.motorcycles(context.shop.id) } }
+                val s = async { runCatching { StoreRepository.shopSettings(context.shop.id) } }
+                val sh = async { runCatching { StoreRepository.cashierShifts(context.shop.id) } }
+                val h = async { runCatching { StoreRepository.heldSales(context.shop.id) } }
+                val rs = async { runCatching { RetailRepository.serials(context.shop.id) } }
+                val rp = async { runCatching { RetailRepository.promos(context.shop.id) } }
+                val rf = async { runCatching { RetailRepository.favorites(context.shop.id) } }
+
+                c.await().onSuccess {
+                    customers = it
+                    offlineStore.saveCustomers(context.shop.id, it)
+                }
+                m.await().onSuccess {
+                    motorcycles = it
+                    offlineStore.saveMotorcycles(context.shop.id, it)
+                }
+                s.await().onSuccess { settings = it }
+                sh.await().onSuccess { shifts = it }
+                h.await().onSuccess { heldSales = it }
+                rs.await().onSuccess { retailSerials = it }
+                rp.await().onSuccess { retailPromos = it }
+                rf.await().onSuccess { retailFavorites = it }
+            }
+            val open = shifts.firstOrNull { it.userId == context.userId && it.status == "open" }
+            prefs.edit().apply {
+                if (open != null) putString("open_shift_" + context.shop.id, open.id)
+                else if (shifts.isNotEmpty()) remove("open_shift_" + context.shop.id)
+            }.apply()
         }
         paymongoIntegration = if (
             !offlineMode &&
@@ -317,7 +349,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         ) {
             runCatching { PayMongoRepository.integration(context.shop.id) }.getOrNull()
         } else null
-        pendingCount = offlineStore.pendingSales().size
+        pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
     }
 
     fun requiresRetailOnline(lines: List<CartLine> = cart): Boolean =
@@ -384,13 +416,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
 
     suspend fun syncOfflineSales() {
         syncingOffline = true
-        val pending = offlineStore.pendingSales()
+        val pending = offlineStore.pendingSales().filter { it.payload.shopId == context.shop.id }
         pending.forEach { queued ->
             runCatching { StoreRepository.completeOfflineSale(queued.payload) }
                 .onSuccess { offlineStore.removePendingSale(queued.id) }
                 .onFailure { offlineStore.setPendingError(queued.id, StoreRepository.userMessage(it)) }
         }
-        pendingCount = offlineStore.pendingSales().size
+        pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
         syncingOffline = false
         if (pendingCount == 0 && pending.isNotEmpty()) {
             error = null
@@ -497,9 +529,37 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     }
 
     LaunchedEffect(context.shop.id) {
+        // Display cached stock and barcodes immediately; cloud can take longer.
+        if (offlineStore.hasProductSnapshot(context.shop.id)) {
+            products = offlineStore.loadProducts(context.shop.id)
+            customers = offlineStore.loadCustomers(context.shop.id)
+            motorcycles = offlineStore.loadMotorcycles(context.shop.id)
+            catalogLastSyncedAt = offlineStore.productsCloudSyncedAt(context.shop.id)
+            pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
+            offlineMode = true
+            loading = false
+        }
         runCatching { refresh() }.onFailure { error = StoreRepository.userMessage(it) }
         if (!offlineMode && pendingCount > 0) runCatching { syncOfflineSales() }
         loading = false
+    }
+
+    LaunchedEffect(context.shop.id) {
+        // Retry quietly after a network outage and keep the local catalog fresh.
+        while (true) {
+            delay(120_000)
+            if (!checkout && pendingPayMongo == null && !preparingCheckout &&
+                !syncingOffline && !syncingProducts) {
+                val refreshed = runCatching { refreshCatalog() }.isSuccess
+                if (refreshed) {
+                    if (offlineStore.pendingSales().any { it.payload.shopId == context.shop.id }) {
+                        runCatching { syncOfflineSales() }
+                    }
+                } else if (offlineStore.hasProductSnapshot(context.shop.id)) {
+                    offlineMode = true
+                }
+            }
+        }
     }
 
     LaunchedEffect(pendingPayMongo?.sessionId, paymongoRetryNonce) {
@@ -681,6 +741,45 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         )
 
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Saved locally: " + products.size + " products" +
+                    (catalogLastSyncedAt?.let {
+                        " • Last cloud sync: " + DateFormat.getDateTimeInstance(
+                            DateFormat.SHORT, DateFormat.SHORT
+                        ).format(Date(it))
+                    } ?: " • Cloud sync not completed"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = {
+                    scope.launch {
+                        syncingProducts = true
+                        runCatching { refreshCatalog() }
+                            .onSuccess { error = null }
+                            .onFailure {
+                                if (offlineStore.hasProductSnapshot(context.shop.id)) {
+                                    offlineMode = true
+                                }
+                                error = "Cannot sync products right now. The saved offline catalog is still available: " +
+                                    StoreRepository.userMessage(it)
+                            }
+                        syncingProducts = false
+                    }
+                },
+                enabled = !syncingProducts && !syncingOffline
+            ) {
+                Icon(Icons.Rounded.Sync, contentDescription = null)
+                Spacer(Modifier.width(4.dp))
+                Text(if (syncingProducts) "Syncing…" else "Sync Products")
+            }
+        }
 
         if (trainingMode) {
             Surface(
@@ -1717,7 +1816,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                             offlineStore.saveProducts(context.shop.id, products)
 
                             offlineQueued = provisionalTotal
-                            pendingCount = offlineStore.pendingSales().size
+                            pendingCount = offlineStore.pendingSales().count { it.payload.shopId == context.shop.id }
                             cart = emptyList()
                             checkout = false
                             offlineMode = true
