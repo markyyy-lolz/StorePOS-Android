@@ -156,7 +156,8 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             val now=System.currentTimeMillis()
             for ((key,value) in listOf(
                 "products:$shopId" to json.encodeToString(products),
-                "catalog_epoch:$shopId" to epoch
+                "catalog_epoch:$shopId" to epoch,
+                "products_cloud_synced_at:$shopId" to now.toString()
             )) {
                 db.insertWithOnConflict(
                     "cache_blob",null,
@@ -173,6 +174,9 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             db.endTransaction()
         }
     }
+
+    fun productsCloudSyncedAt(shopId: String): Long? =
+        getBlob("products_cloud_synced_at:$shopId")?.toLongOrNull()
 
     fun cachedCatalogEpoch(shopId: String): String? =
         getBlob("catalog_epoch:$shopId")?.takeIf {
