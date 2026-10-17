@@ -136,6 +136,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     var lastReceiptCart by remember { mutableStateOf<List<CartLine>>(emptyList()) }
     var lastPayments by remember { mutableStateOf<List<CheckoutPayment>>(emptyList()) }
     var lastReceiptToken by remember { mutableStateOf<String?>(null) }
+    // Freeze this sale's offer so PDF/reprint never picks up a later threshold change.
+    var lastReceiptFreebieRule by remember { mutableStateOf<ReceiptFreebieRule?>(null) }
     var receiptPrintedOnce by remember { mutableStateOf(false) }
     var printing by remember { mutableStateOf(false) }
     var printMessage by remember { mutableStateOf<String?>(null) }
@@ -164,6 +166,9 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
         prefs.getBoolean("training_mode_" + context.shop.id, false)
     }
     val offlineStore = remember { OfflineStore(androidContext) }
+    var receiptFreebieRule by remember(context.shop.id) {
+        mutableStateOf(offlineStore.loadReceiptFreebieRule(context.shop.id))
+    }
     val customerDisplay = remember { CustomerDisplayController(androidContext) }
     var pendingReceiptPdf by remember { mutableStateOf<Pair<String, ByteArray>?>(null) }
     val saveReceiptPdf = rememberLauncherForActivityResult(
@@ -203,7 +208,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             digitalReceiptUrl = lastReceiptToken?.let {
                 "https://markyyy-lolz.github.io/StorePOS-Web/#/receipt/" + it
             },
-            paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm)
+            paperWidth = prefs.getInt("paper_width", settings.printerPaperWidthMm),
+            receiptFreebieRule = lastReceiptFreebieRule
         )
 
     val scanTone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 75) }
@@ -335,6 +341,13 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
     suspend fun refresh() {
         try {
             refreshCatalog()
+            // Shop-wide promotional rule is independent of cashier/shift endpoints.
+            // Persist the verified cloud value for receipt printing after a cold offline restart.
+            runCatching { StoreRepository.receiptFreebieRule(context.shop.id) }
+                .onSuccess { updated ->
+                    receiptFreebieRule = updated
+                    offlineStore.saveReceiptFreebieRule(updated)
+                }
             coroutineScope {
                 val c = async { StoreRepository.customers(context.shop.id) }
                 val m = async { StoreRepository.motorcycles(context.shop.id) }
@@ -500,6 +513,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             paperWidth = paperWidth,
             receiptHeader = settings.receiptHeader,
             receiptFooter = settings.receiptFooter,
+            receiptFreebieRule = lastReceiptFreebieRule,
             payments = payments,
             cashierLabel = if (settings.receiptShowCashier) (StoreRepository.currentUserEmail() ?: context.member.role) else null,
             openCashDrawer = settings.cashDrawerEnabled && payments.any { it.method == "cash" },
@@ -689,6 +703,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = pending.receiptCart
                         lastPayments = listOf(verifiedPayment)
                         lastSale = result.sale
+                        lastReceiptFreebieRule = receiptFreebieRule
                         lastSaleTraining = false
                         receiptPrintedOnce = false
                         cart = emptyList()
@@ -1264,6 +1279,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                     lastReceiptCart = emptyList()
                     lastPayments = emptyList()
                     lastReceiptToken = null
+                    lastReceiptFreebieRule = null
                     receiptPrintedOnce = false
                     printMessage = null
                 }
@@ -1802,6 +1818,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = trainingSale
+                        lastReceiptFreebieRule = null
                         lastSaleTraining = true
                         receiptPrintedOnce = false
                         printMessage = "Training transaction only • nothing was saved to StorePOS Cloud."
@@ -1908,6 +1925,7 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                         lastReceiptCart = receiptCart
                         lastPayments = payments
                         lastSale = sale
+                        lastReceiptFreebieRule = receiptFreebieRule
                         lastSaleTraining = false
                         receiptPrintedOnce = false
                         cart = emptyList()
@@ -1985,7 +2003,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
                                     paperWidth = paperWidth,
                                     cashierLabel = StoreRepository.currentUserEmail()
                                         ?: context.member.role,
-                                    footerFeedLines = ReceiptCutSettings.get(androidContext)
+                                    footerFeedLines = ReceiptCutSettings.get(androidContext),
+                                    receiptFreebieRule = receiptFreebieRule
                                 )
                             }.getOrElse { receiptError ->
                                 error = "Cannot save a printable offline receipt. Cart is still " +

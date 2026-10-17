@@ -369,6 +369,25 @@ object StoreRepository {
         client.from("shop_settings").upsert(settings)
     }
 
+    /** Optional store-specific promotional gift; no record means disabled. */
+    suspend fun receiptFreebieRule(shopId: String): ReceiptFreebieRule =
+        client.from("storepos_receipt_freebie_rules").select {
+            filter { eq("shop_id", shopId) }
+        }.decodeList<ReceiptFreebieRule>().firstOrNull()
+            ?: ReceiptFreebieRule(shopId = shopId)
+
+    /** RLS permits only a member with the owner/admin role of this StorePOS shop. */
+    suspend fun updateReceiptFreebieRule(rule: ReceiptFreebieRule) {
+        require(rule.shopId.isNotBlank() && rule.minimumTotal > 0 &&
+            rule.minimumTotal.isFinite() && rule.minimumTotal <= 1_000_000 &&
+            rule.quantity in 1..20 && rule.giftName.length <= 80 &&
+            (!rule.enabled || rule.giftName.isNotBlank())) {
+            "Enter a valid spending threshold and a free item."
+        }
+        client.from("storepos_receipt_freebie_rules").upsert(rule) { select() }
+            .decodeSingle<ReceiptFreebieRule>()
+    }
+
     /** Fetch the complete shop catalog; the API's row limit can truncate a single request. */
     suspend fun products(shopId: String): List<Product> {
         val pageSize = 500

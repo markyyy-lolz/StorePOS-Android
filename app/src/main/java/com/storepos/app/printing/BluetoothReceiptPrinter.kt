@@ -116,7 +116,8 @@ class BluetoothReceiptPrinter(
             sectionOrder: List<String> = listOf(
                 "store", "meta", "items", "totals", "payment", "digital", "footer"
             ),
-            footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES
+            footerFeedLines: Int = ReceiptCutSettings.DEFAULT_LINES,
+            receiptFreebieRule: com.storepos.app.data.model.ReceiptFreebieRule? = null
         ): ByteArray {
             val charset = Charset.forName("CP437")
             val width = if (paperWidth == 58) 32 else 48
@@ -229,6 +230,19 @@ class BluetoothReceiptPrinter(
             }
 
             sections["footer"] = buildList {
+                // Eligibility only; staff must validate the receipt and record actual giveaway.
+                if (receiptFreebieRule?.qualifies(sale.totalAmount) == true &&
+                    receiptFreebieRule.shopId == sale.shopId) {
+                    add(thin)
+                    add(center("FREE ITEM REWARD - YOU QUALIFY!", width))
+                    val gift = receiptFreebieRule.quantity.toString() +
+                        " x " + receiptFreebieRule.giftName.trim()
+                    addAll(gift.chunked(width).map { center(it, width) })
+                    add(center("PRICE: PHP 0.00", width))
+                    add(center("Present receipt to claim", width))
+                    add(center("Subject to staff verification", width))
+                    add(center("One reward per verified sale", width))
+                }
                 add(thin)
                 receiptFooter?.trim()?.takeIf { it.isNotBlank() }?.lines()?.forEach {
                     add(center(it, width))

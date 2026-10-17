@@ -24,6 +24,8 @@ import com.storepos.app.data.model.DeviceSession
 import com.storepos.app.data.model.ShopContext
 import com.storepos.app.data.model.ShopMember
 import com.storepos.app.data.model.ShopSettings
+import com.storepos.app.data.model.ReceiptFreebieRule
+import com.storepos.app.data.local.OfflineStore
 import com.storepos.app.data.model.UserProfile
 import com.storepos.app.data.model.MemberPermissionOverride
 import com.storepos.app.notifications.StorePosAlertWorker
@@ -54,6 +56,12 @@ fun SettingsPage(context: ShopContext) {
     var latest by remember { mutableStateOf<AppVersion?>(null) }
     var posSettings by remember { mutableStateOf(ShopSettings(shopId = context.shop.id)) }
     var posSettingsOpen by remember { mutableStateOf(false) }
+    val offlineStore = remember { OfflineStore(androidContext) }
+    var giftRule by remember(context.shop.id) {
+        mutableStateOf(offlineStore.loadReceiptFreebieRule(context.shop.id))
+    }
+    var giftRuleSettingsOpen by remember { mutableStateOf(false) }
+    var savingGiftRule by remember { mutableStateOf(false) }
     var receiptDesignerOpen by remember { mutableStateOf(false) }
     var customerDisplaySettingsOpen by remember { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
@@ -82,6 +90,11 @@ fun SettingsPage(context: ShopContext) {
         runCatching { StoreRepository.shopSettings(context.shop.id) }
             .onSuccess { posSettings = it }
             .onFailure { error = StoreRepository.userMessage(it) }
+        runCatching { StoreRepository.receiptFreebieRule(context.shop.id) }
+            .onSuccess {
+                giftRule = it
+                offlineStore.saveReceiptFreebieRule(it)
+            }
         refreshAdminData()
     }
 
@@ -343,6 +356,31 @@ fun SettingsPage(context: ShopContext) {
             }
         }
 
+        if (canAdmin) {
+            MotoCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.CardGiftcard, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Spend & Get Free Item", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (giftRule.enabled)
+                                "Spend at least PHP " + giftRule.minimumTotal.toInt() +
+                                    " and earn " + giftRule.quantity + " x " + giftRule.giftName
+                            else "Promo currently disabled — no free gifts promised on receipts.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Owner-only cloud rule, cached for offline receipts on this tablet. " +
+                                "Physical giveaway and stock must be verified by staff.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                Button(onClick = { giftRuleSettingsOpen = true }) { Text("Configure Free Item Promo") }
+            }
+        }
+
         PrinterSettingsCard(context)
         SharedPrinterSettingsCard(context)
 
@@ -600,6 +638,27 @@ fun SettingsPage(context: ShopContext) {
                         }
                         .onFailure { error = StoreRepository.userMessage(it) }
                     savingSettings = false
+                }
+            }
+        )
+    }
+
+    if (giftRuleSettingsOpen) {
+        ReceiptFreebieSettingsDialog(
+            rule = giftRule,
+            saving = savingGiftRule,
+            onDismiss = { giftRuleSettingsOpen = false },
+            onSave = { updated ->
+                savingGiftRule = true
+                scope.launch {
+                    runCatching {
+                        StoreRepository.updateReceiptFreebieRule(updated)
+                        offlineStore.saveReceiptFreebieRule(updated)
+                    }.onSuccess {
+                        giftRule = updated
+                        giftRuleSettingsOpen = false
+                    }.onFailure { error = StoreRepository.userMessage(it) }
+                    savingGiftRule = false
                 }
             }
         )

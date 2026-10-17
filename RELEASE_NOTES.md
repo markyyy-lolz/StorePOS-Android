@@ -1,28 +1,30 @@
-# StorePOS Android v1.8.7 — Trusted Cloud Products Available Offline
+# StorePOS Android v1.8.8 — Spend & Get Free Item on Receipts
 
-**Build 39 • Updated from v1.8.6 (build 38), package `com.storepos.app`.**
+**Build 40 • Update over Android v1.8.7 (39) • package `com.storepos.app`.**
 
-## What's new
-- **StorePOS Cloud → SQLite:** fetches the complete current shop's Supabase product catalog in 500-item pages and atomically saves a trusted SQLite snapshot with the catalog reset/epoch marker.
-- **Offline catalog immediately:** after one successful online catalog sync, the POS loads saved products, barcodes, prices and stock when the screen opens, without waiting for internet requests.
-- **Independent cloud product caching:** a temporary error in customers, cashier shifts, settings, serials, favorites or promotions cannot prevent a successful catalog download being cached.
-- **Automatic refresh:** updates catalog while idle approximately every two minutes. Manual **Sync Products** is available in the POS screen, with last successful cloud sync time and local product count.
-- **Protected local quantities:** cloud refresh subtracts unreconciled cash sales belonging to the current shop **and the current catalog generation**, without changing non-stock-tracked items.
+## New: Shop-wide spend threshold free item
+- Owner/admin: **Settings → Spend & Get Free Item → Configure Free Item Promo**.
+- Default is DISABLED. Set a minimum paid total (example PHP 1,500), item name, quantity and enable the offer. The configured rule syncs through the dedicated `public.storepos_receipt_freebie_rules` table with StorePOS-only shop RLS.
+- Eligible *completed* sales include **FREE ITEM REWARD**, the free item description/quantity and **PRICE: PHP 0.00** on 58mm/80mm physical thermal receipts.
+- Threshold compares the FINAL payable total after discounts, not simply the gross subtotal. Receipts below the limit show no free item notice.
+- Rules are saved locally on each tablet in a shop-scoped SQLite blob after cloud refresh. A verified cached rule supports offline cash sale receipts even after the app is closed and reopened without internet. The exact offline thermal receipt bytes are stored with the queued sale, so its Save PDF output matches.
+- Online receipt PDF uses the same thermal renderer and reward rule. The existing Azurate supplier footer and all StorePOS v1.8.7 offline catalog protections remain unchanged.
 
-## Keep existing v1.8.6 safety protections
-- All existing **SQLite schema v4 migrations**, trusted shop epochs, reset safety, manager-review queues, offline inventory movements, cloud idempotent cash reconciliation, local receipt bytes/PDF, PayMongo restrictions and 80mm/58mm Azurate footer remain.
-- A tablet with no trusted online snapshot **must not sell offline**. Offline cash payments still require the existing role/device/shift checks.
-- Cloud catalog replacement is refused while there are unsynced or needs-review offline inventory operations, to protect stock changes.
-- This APK does not alter the Supabase schema or delete existing shop products, sales, receipts, outboxes or client accounts. MotoPOS and BrewPOS are unaffected.
+## Safety and redemption limitation
+- The printed reward is a **claim eligibility notice**, not a recorded redemption, automatic stock deduction or proof the free item has been handed over.
+- Staff must verify the receipt and independently record issuance/stock adjustment. **Do not hand out multiple gifts against duplicate printouts**. Cloud-enforced one-time redemption scanning is a separate future feature.
+- Configurations are initially disabled for every shop; no sale, inventory or MotoPOS/BrewPOS data has been changed.
+- The Supabase StorePOS-only migration is required. If a tablet is offline and has not downloaded an enabled rule, no offer is shown; sync Settings/POS online once first.
+- No gift is added to the paid cart or cloud sale_items, preventing unsupported inventory/tax manipulation.
 
-## Safe install & offline acceptance test
-1. Install v1.8.7 **over v1.8.6**. **Do not uninstall, clear app data or reset the tablet.**
-2. With internet enabled, open **POS → Sync Products** on *each* Samsung Galaxy Tab A9+.
-3. Verify the saved product count and timestamp, scan a barcode, and check the expected price and quantity.
-4. Turn off internet and reopen POS. Products and scanning should work from SQLite.
-5. Make an authorized small cash transaction and verify local receipt printing, queued status and idempotent cloud reconciliation after reconnect.
-6. Test two tablets separately; on-device stock is provisional while another terminal remains offline.
+## Safe deployment on Samsung Galaxy Tab A9+
+1. Back up device's offline outbox and check unsynced sales. **Install directly over v1.8.7**, never uninstall/clear data.
+2. While online as StorePOS owner/admin, configure and enable a rule in Settings.
+3. On each tablet, open POS online so the shared rule can be downloaded and cached.
+4. Test a qualifying cash sale (example PHP 1,500) and one PHP 1,499 sale; inspect the printed receipt and Save PDF.
+5. Turn off internet; close and reopen StorePOS; complete an authorized test cash sale, confirm same reward notice and local printing, then reconnect and verify idempotent sale sync.
+6. Test 80mm VOZY G80 on physical devices before production use.
 
 ## Verification
-- Build/test/lint in GitHub Actions before distribution. Validate the real devices, direct and shared VOZY G80 printer, and live Supabase policies before using as production.
-- Keep an up-to-date offline database backup before upgrading any production terminal.
+- GitHub workflow runs unit tests, Android lint, APK build and signature verification before publishing.
+- Live printer, stock handling for manually redeemed rewards, and production multi-tablet acceptance remain manual checks.

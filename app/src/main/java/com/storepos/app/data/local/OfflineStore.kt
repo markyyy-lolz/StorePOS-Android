@@ -133,6 +133,17 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
 
+    /** A verified cloud rule stays available after a cold start without internet. */
+    fun saveReceiptFreebieRule(rule: ReceiptFreebieRule) {
+        require(rule.shopId.isNotBlank())
+        putBlob("receipt_freebie_rule:${rule.shopId}", json.encodeToString(rule))
+    }
+
+    fun loadReceiptFreebieRule(shopId: String): ReceiptFreebieRule =
+        getBlob("receipt_freebie_rule:$shopId")?.let {
+            runCatching { json.decodeFromString<ReceiptFreebieRule>(it) }.getOrNull()
+        }?.takeIf { it.shopId == shopId } ?: ReceiptFreebieRule(shopId)
+
     fun saveProducts(shopId: String, products: List<Product>) =
         putBlob("products:$shopId", json.encodeToString(products))
 
