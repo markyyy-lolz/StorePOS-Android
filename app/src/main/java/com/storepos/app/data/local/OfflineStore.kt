@@ -79,6 +79,17 @@ class OfflineStore(context: Context) : SQLiteOpenHelper(
             runCatching { json.decodeFromString<List<Product>>(it) }.getOrDefault(emptyList())
         } ?: emptyList()
 
+    /** Distinguishes an empty but fully synced catalog from a first-time device. */
+    fun hasProductSnapshot(shopId: String): Boolean =
+        getBlob("products:$shopId") != null
+
+    /** Updated only after a successful cloud catalog download and SQLite write. */
+    fun markProductsCloudSynced(shopId: String) =
+        putBlob("products_cloud_sync:$shopId", System.currentTimeMillis().toString())
+
+    fun productsCloudSyncedAt(shopId: String): Long? =
+        getBlob("products_cloud_sync:$shopId")?.toLongOrNull()
+
     fun saveCustomers(shopId: String, customers: List<Customer>) =
         putBlob("customers:$shopId", json.encodeToString(customers))
 
