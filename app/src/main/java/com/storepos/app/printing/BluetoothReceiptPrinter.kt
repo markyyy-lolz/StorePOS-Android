@@ -239,7 +239,7 @@ class BluetoothReceiptPrinter(
                         " x " + receiptFreebieRule.giftName.trim()
                     addAll(gift.chunked(width).map { center(it, width) })
                     add(center("PRICE: PHP 0.00", width))
-                    add(center("Claim at counter with this receipt", width))
+                    add(center("Present receipt to claim", width))
                     add(center("Subject to staff verification", width))
                     add(center("One reward per verified sale", width))
                 }
