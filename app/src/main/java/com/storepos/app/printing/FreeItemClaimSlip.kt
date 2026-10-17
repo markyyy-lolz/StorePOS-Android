@@ -33,6 +33,7 @@ internal object FreeItemClaimSlip {
             add(center(safe(shopName).take(columns)))
             add("-".repeat(columns))
             add(center("FREE ITEM CLAIM SLIP"))
+            add(center("FREE ITEM REWARD"))
             add(center("YOU QUALIFY!"))
             add("-".repeat(columns))
             addAll(wrap("Gift: ", "${rule.quantity} x ${rule.giftName}"))
