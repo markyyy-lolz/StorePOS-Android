@@ -811,11 +811,17 @@ private fun ProductLabelCenterDialog(
     val androidContext = LocalContext.current
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf(products.firstOrNull()) }
+    var batchMode by remember { mutableStateOf(false) }
+    var batchIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var menuOpen by remember { mutableStateOf(false) }
     var copies by remember { mutableStateOf("1") }
     var printing by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val count = copies.toIntOrNull()
+    val batchProducts = products.filter { it.id in batchIds }
+    val validCount = count != null && count in 1..100
+    val validBatch = batchProducts.size in 1..20 &&
+        count != null && batchProducts.size * count <= 100
 
     AlertDialog(
         onDismissRequest = { if (!printing) onDismiss() },
@@ -826,6 +832,32 @@ private fun ProductLabelCenterDialog(
                     "Print product name, selling price, barcode/SKU and shelf location using the configured ESC/POS printer.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Batch labels (up to 20 SKUs)", modifier = Modifier.weight(1f))
+                    Switch(checked = batchMode, onCheckedChange = { batchMode = it; message = null })
+                }
+                if (batchMode) {
+                    Text("Select products below. Each gets its own cut label. " +
+                        "Maximum 100 printed labels total.", style = MaterialTheme.typography.bodySmall)
+                    LazyColumn(Modifier.heightIn(max = 240.dp)) {
+                        items(products, key = { it.id }) { product ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = product.id in batchIds,
+                                    onCheckedChange = { yes ->
+                                        batchIds = if (yes) {
+                                            if (batchIds.size < 20) batchIds + product.id else batchIds
+                                        } else batchIds - product.id
+                                    },
+                                    enabled = product.id in batchIds || batchIds.size < 20
+                                )
+                                Text(product.name + " • " + product.sku, maxLines = 1)
+                            }
+                        }
+                    }
+                    Text("${batchProducts.size} SKU(s) selected", style = MaterialTheme.typography.labelSmall)
+                }
+                if (!batchMode) {
                 Box {
                     OutlinedButton(
                         onClick = { menuOpen = true },
@@ -875,10 +907,11 @@ private fun ProductLabelCenterDialog(
                     }
                 }
 
+                }
                 OutlinedTextField(
                     value = copies,
                     onValueChange = { copies = it.filter(Char::isDigit).take(3) },
-                    label = { Text("Number of labels") },
+                    label = { Text(if (batchMode) "Copies per selected SKU" else "Number of labels") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
@@ -896,24 +929,25 @@ private fun ProductLabelCenterDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val product = selected ?: return@Button
                     val labelCount = count ?: return@Button
+                    if (!batchMode && selected == null) return@Button
                     printing = true
                     message = null
                     scope.launch {
-                        val result = ProductLabelPrinter.printConfigured(
-                            androidContext,
-                            product,
-                            labelCount
-                        )
+                        val result = if (batchMode) {
+                            ProductLabelPrinter.printConfiguredBatch(androidContext, batchProducts, labelCount)
+                        } else {
+                            ProductLabelPrinter.printConfigured(androidContext, selected!!, labelCount)
+                        }
+                        val total = if (batchMode) batchProducts.size * labelCount else labelCount
                         message = result.fold(
-                            onSuccess = { "Printed " + labelCount + " label(s)." },
+                            onSuccess = { "Printed " + total + " label(s). Check the paper before retrying." },
                             onFailure = { StoreRepository.userMessage(it) }
                         )
                         printing = false
                     }
                 },
-                enabled = selected != null && count != null && count in 1..100 && !printing
+                enabled = !printing && (if (batchMode) validBatch else selected != null && validCount)
             ) {
                 Icon(Icons.Rounded.Print, null)
                 Spacer(Modifier.width(6.dp))
