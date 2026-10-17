@@ -301,8 +301,8 @@ fun PosPage(context: ShopContext, entitlements: PlanEntitlements) {
             // Cached products are usable without any cloud connection, including
             // when this device opens POS for the first time after going offline.
             if (!offlineStore.hasProductSnapshot(context.shop.id)) {
-                throw catalogResult.exceptionOrNull()
-                    ?: IllegalStateException("No local product catalog is available.")
+                throw (catalogResult.exceptionOrNull()
+                    ?: IllegalStateException("No local product catalog is available."))
             }
             products = offlineStore.loadProducts(context.shop.id)
             customers = offlineStore.loadCustomers(context.shop.id)
