@@ -139,21 +139,32 @@ object ReceiptPdfExporter {
             } else 0f
         }
 
-        fun blockHeight(index: Int): Float =
-            if (elements[index] is ThermalReceiptElement.Text) lineHeight else qrSizes[index] + lineHeight
+        fun blockHeight(index: Int): Float = when (elements[index]) {
+            is ThermalReceiptElement.Text -> lineHeight
+            is ThermalReceiptElement.QrCode -> qrSizes[index] + lineHeight
+            is ThermalReceiptElement.Cut -> 0f
+        }
 
         val pages = mutableListOf<List<Int>>()
         var current = mutableListOf<Int>()
         var usedHeight = 0f
         elements.indices.forEach { index ->
-            val block = blockHeight(index)
-            if (current.isNotEmpty() && usedHeight + block + margin * 2 > maxPageHeight) {
-                pages += current
+            if (elements[index] is ThermalReceiptElement.Cut) {
+                // Respect the physical first cut: voucher starts on a
+                // dedicated PDF page rather than below the sales receipt.
+                if (current.isNotEmpty()) pages += current
                 current = mutableListOf()
                 usedHeight = 0f
+            } else {
+                val block = blockHeight(index)
+                if (current.isNotEmpty() && usedHeight + block + margin * 2 > maxPageHeight) {
+                    pages += current
+                    current = mutableListOf()
+                    usedHeight = 0f
+                }
+                current += index
+                usedHeight += block
             }
-            current += index
-            usedHeight += block
         }
         if (current.isNotEmpty()) pages += current
 
@@ -175,6 +186,7 @@ object ReceiptPdfExporter {
                             canvas.drawText(element.line, margin, y + paint.textSize, paint)
                             y += lineHeight
                         }
+                        is ThermalReceiptElement.Cut -> Unit
                         is ThermalReceiptElement.QrCode -> {
                             val matrix = QRCodeWriter().encode(
                                 element.content, BarcodeFormat.QR_CODE, 1, 1, qrHints
