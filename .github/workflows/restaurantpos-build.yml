@@ -7,6 +7,9 @@ on:
       - '!restaurantpos-android/releases/**'
       - '.github/workflows/restaurantpos-build.yml'
   workflow_dispatch:
+concurrency:
+  group: restaurantpos-native-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
