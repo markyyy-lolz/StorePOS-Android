@@ -151,6 +151,7 @@ final class CloudApi {
     }
     return "Synced "+count+" • Conflicts "+conflicts;
   }
+  String paymentStatus(String cloudId)throws Exception{ return request("GET","/api/orders/"+cloudId+"/paymongo-status",null).optString("status","unknown"); }
   String gatewayCheckout(String cloudId)throws Exception{
     JSONObject r=request("POST","/api/orders/"+cloudId+"/paymongo-checkout",new JSONObject());
     String url=r.getString("checkout_url");
