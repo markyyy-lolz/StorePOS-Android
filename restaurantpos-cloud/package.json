@@ -1,0 +1,15 @@
+{
+  "name": "restaurantpos-cloud-staging",
+  "private": true,
+  "version": "0.2.1",
+  "type": "module",
+  "scripts": {
+    "start": "node setup.js && node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

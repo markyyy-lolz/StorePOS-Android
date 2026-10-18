@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-  <style name="RestaurantPosTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-    <item name="android:colorAccent">#1769E0</item>
-    <item name="android:statusBarColor">#1459BD</item>
-    <item name="android:navigationBarColor">#FFFFFF</item>
-  </style>
-</resources>

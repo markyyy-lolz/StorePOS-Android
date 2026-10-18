@@ -1,0 +1,3 @@
+# RestaurantPOS Cloud staging backend
+
+Isolated GitHub branch `restaurantpos-cloud-staging-v0.2.1`; Node API for native RestaurantPOS Android v0.2.0. This is a staging subset, NOT production-certified. The full deployment kit is available separately. Database credentials must be configured only in Render private environment. Default no owner account, no sample records, no live PayMongo. Bootstrap requires OWNER_EMAIL, OWNER_PASSWORD, OWNER_NAME, RESTAURANT_NAME provided securely as environment variables (remove password after bootstrap). All sale acknowledgments are supplementary non-BIR, not tax invoices. Do not use for public paid restaurant service until integration, printer, tax, security and hardware tests have passed.
