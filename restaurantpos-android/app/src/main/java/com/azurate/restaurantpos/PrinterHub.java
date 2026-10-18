@@ -50,7 +50,6 @@ final class PrinterHub {
         String mac=p.getString("mac");
         BluetoothDevice device=a.getRemoteDevice(mac);
         if(device.getBondState()!=BluetoothDevice.BOND_BONDED)throw new IOException("Pair printer in Android Bluetooth settings first.");
-        a.cancelDiscovery();
         try(BluetoothSocket s=device.createRfcommSocketToServiceRecord(SPP)){
           s.connect();s.getOutputStream().write(data);s.getOutputStream().flush();
         }return;
