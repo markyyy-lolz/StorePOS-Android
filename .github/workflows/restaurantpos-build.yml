@@ -21,6 +21,25 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+      - name: Restore stable internal signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: restaurantpos-native-debug-keystore-v0.2
+      - name: Create stable internal signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=RestaurantPOS Internal,O=Azurate Software Solutions,C=PH"
+          fi
       - name: Compile native APK
         run: gradle -p restaurantpos-android :app:assembleDebug --stacktrace
       - name: Verify installable APK
