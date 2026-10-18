@@ -7,6 +7,7 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.hardware.usb.*;
 import android.os.Build;
+import android.widget.Toast;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
