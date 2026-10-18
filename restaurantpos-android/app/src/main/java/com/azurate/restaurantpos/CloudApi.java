@@ -17,7 +17,7 @@ final class CloudApi {
   boolean onlineSession=false;
   CloudApi(Context c){context=c; base=prefs().getString("server","");}
   android.content.SharedPreferences prefs(){return context.getSharedPreferences("restaurantpos_cloud",Context.MODE_PRIVATE);}
-  void setBase(String url){UriCheck(url);base=url;cookie="";onlineSession=false;prefs().edit().putString("server",base).apply();}
+  void setBase(String url){UriCheck(url);base=url.endsWith("/")?url.substring(0,url.length()-1):url;cookie="";onlineSession=false;prefs().edit().putString("server",base).apply();}
   static void UriCheck(String raw){
     UriWrapper.parse(raw);
   }
