@@ -1,11 +1,22 @@
-# RestaurantPOS Android v0.1.0
-Package: com.azurate.restaurantpos
+# RestaurantPOS Native Android v0.2.0
 
-This is a real installable Android APK: native settings and system printing with a secure embedded web-powered RestaurantPOS Cloud UI. It is not a fully native Compose UI. The separate Neon database has been created, but the REST backend needs to be hosted at a public HTTPS URL and an owner account created. No Neon credentials are shipped in the APK.
+Native Java Android app (no WebView UI), independent package `com.azurate.restaurantpos`. Development branch only; StorePOS production app unchanged.
 
-Use JDK 17, Gradle 8.11.1 and Android SDK 36:
-    gradle :app:assembleDebug
+## Features
+- Native touchscreen dashboard, dine-in/takeout menu POS, kitchen queue, orders, printer settings, and device/cloud status.
+- SQLite-backed menu cache, order outbox, printable kitchen-ticket queue, client-request UUID deduplication.
+- Short-lived (8h) offline staff re-authentication after successful online login; encrypted at rest is NOT yet implemented.
+- Cloud REST sync to existing RestaurantPOS Node API and separate Neon PostgreSQL project. Server calculates live prices; mismatches are marked conflicts and payments are withheld.
+- Configurable multiple ESC/POS printers: TCP LAN/Wi-Fi port 9100, paired Bluetooth SPP, and USB bulk-out with Android permission prompt. Output routes separately to receipt vs kitchen; can send to multiple per role.
+- Cash acknowledgment via local provisional slip; separately labeled non-BIR, not an official invoice.
+- PayMongo checkout entry from native orders, **requires separate updated backend** and merchant credentials. The app never embeds payment secret keys.
 
-Cloud-only. Requires internet. Receipt print is through Android system Print/Save as PDF; direct ESC/POS auto-cut and offline mode not supported. Payment gateway authorization not supported (manual recording only). A non-BIR acknowledgment is never a substitute for a legally required invoice.
+## Important limitations
+- Real offline inventory reconciliation, refunds, split bills, secure hardware key storage, hardware printer certification, end-to-end production acceptance, and cloud deployment remain pending.
+- Most ESC/POS transports cannot confirm paper output: each job gets only one automatic attempt; uncertain delivery requires a conscious reprint.
+- Android app should be tested with actual selected thermal models, LAN isolation policy, and production HTTPS domain before restaurant usage.
+- Do not uninstall or clear app data while offline outbox contains unsynced orders.
 
-Source and debug artifact are on the separate restaurantpos-android-v0.1.0 branch of StorePOS-Android. StorePOS main is not modified.
+## Build
+JDK 17, Android SDK 36, Gradle 8.11.1: `gradle :app:assembleDebug`
+Signed debug APK is auto-built in GitHub Actions from the isolated branch.
