@@ -8,6 +8,9 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.*;
 import android.view.*;
 import android.widget.*;
@@ -22,6 +25,8 @@ public final class NativeActivity extends Activity {
   String page="Dashboard",service="dine_in",table="",orderNote="";
   final LinkedHashMap<String,Integer> cart=new LinkedHashMap<>();
   boolean busy=false;
+  ConnectivityManager connectivity;
+  ConnectivityManager.NetworkCallback cloudNetworkCallback;
   int d(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
   GradientDrawable bg(int color,int rad){GradientDrawable x=new GradientDrawable();x.setColor(color);x.setCornerRadius(d(rad));return x;}
   TextView text(String value,int size,int color,boolean bold){
@@ -65,6 +70,20 @@ public final class NativeActivity extends Activity {
   @Override public void onCreate(Bundle bundle){
     super.onCreate(bundle);getWindow().setStatusBarColor(0xff1459bd);
     db=new LocalStore(this);api=new CloudApi(this);
+    connectivity=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+    if(connectivity!=null){
+      cloudNetworkCallback=new ConnectivityManager.NetworkCallback(){
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities caps){
+          if(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)){
+            runOnUiThread(()->{
+              if(!api.tenant.isEmpty() && api.onlineSession && !busy)sync();
+            });
+          }
+        }
+      };
+      try{connectivity.registerDefaultNetworkCallback(cloudNetworkCallback);}catch(SecurityException ignored){}
+    }
     login();
   }
   void shell(String title){
@@ -426,5 +445,5 @@ public final class NativeActivity extends Activity {
     line(q,"Offline SQLite","Local data is not encrypted. Secure the device, avoid uninstalling, and back up before migration.");
     line(q,"Non-BIR acknowledgment","Issue legally required BIR invoices separately.");
   }
-  @Override protected void onDestroy(){executor.shutdown();if(db!=null)db.close();super.onDestroy();}
+  @Override protected void onDestroy(){executor.shutdown();if(connectivity!=null&&cloudNetworkCallback!=null){try{connectivity.unregisterNetworkCallback(cloudNetworkCallback);}catch(Exception ignored){}}if(db!=null)db.close();super.onDestroy();}
 }
