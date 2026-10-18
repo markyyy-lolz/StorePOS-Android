@@ -263,6 +263,10 @@ public final class NativeActivity extends Activity {
       if(!cloud.isEmpty()&&!sale.optString("cloud_status").equals("conflict")
           &&sale.isNull("local_payment")){
         p.addView(secondary("Pay with PayMongo • Online",()->paymongo(cloud)),margin(10));
+        p.addView(secondary("Verify gateway payment status",()->{
+          if(!api.onlineSession){toast("Connect and sign in online first.");return;}
+          work(()->{String status=api.paymentStatus(cloud);runOnUiThread(()->toast("PayMongo: "+status));},()->render());
+        }),margin(8));
       }
       p.addView(secondary("Reprint kitchen ticket (audited local copy)",()->reprint(sale,"kitchen")),margin(7));
       if(!sale.isNull("local_payment"))p.addView(secondary("Reprint acknowledgment",()->reprint(sale,"receipt")),margin(7));
