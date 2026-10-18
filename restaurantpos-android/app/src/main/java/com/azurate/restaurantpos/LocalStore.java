@@ -84,7 +84,18 @@ final class LocalStore extends SQLiteOpenHelper {
     }catch(Exception e){throw new IllegalStateException(e);}
     return out;
   }
-  synchronized JSONArray pending(String tenant){JSONArray out=new JSONArray(),all=sales(tenant);for(int i=all.length()-1;i>=0;i--){JSONObject a=all.optJSONObject(i);if(a!=null&&!a.optString("cloud_status").equals("synced"))out.put(a);}return out;}
+  synchronized JSONArray pending(String tenant){
+    JSONArray out=new JSONArray();
+    try(Cursor c=getReadableDatabase().rawQuery("SELECT id,json,amount,cloud_id,local_payment,cloud_status,error,created FROM sales WHERE tenant=? AND cloud_status<>'synced' ORDER BY created ASC",new String[]{tenant})){
+      while(c.moveToNext()){JSONObject o=new JSONObject();
+        String[] names={"id","json","amount","cloud_id","local_payment","cloud_status","error","created"};
+        for(int k=0;k<8;k++){if(c.isNull(k))o.put(names[k],JSONObject.NULL);
+          else if(k==2||k==7)o.put(names[k],c.getLong(k));else o.put(names[k],c.getString(k));}
+        out.put(o);
+      }
+    }catch(Exception e){throw new IllegalStateException(e);}
+    return out;
+  }
   synchronized void cloudCreated(String id,String cloud){
     ContentValues v=new ContentValues();v.put("cloud_id",cloud);v.put("cloud_status","pending_payment");v.put("error","");
     getWritableDatabase().update("sales",v,"id=?",new String[]{id});
