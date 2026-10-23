@@ -7,7 +7,7 @@ import {verifyWebhook,paymongo,paidPayment} from './paymongo.js';
 import {readRawBody} from './request-body.js';
 import {cashSettlementDecision} from './payment-policy.js';
 import pg from 'pg';
-import {verifyPassword,sessionToken,tokenHash,requiredString,minorFromPesos,calculateTotals,receiptText} from './lib.js';
+import {verifyPassword,hashPassword,sessionToken,tokenHash,requiredString,minorFromPesos,calculateTotals,receiptText} from './lib.js';
 const {Pool}=pg;
 const db=new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:true},max:10,connectionTimeoutMillis:8000});
 const PORT=Number(process.env.PORT||3000);
@@ -308,6 +308,35 @@ const server=createServer(async(req,res)=>{
   json(res,{error:status>=500?'Internal server error.':e.code==='23505'?'This entry already exists.':e.message},status);
  }
 });
+async function initializeOwnerOnce() {
+ const email=(process.env.OWNER_EMAIL||'').trim().toLowerCase();
+ const password=process.env.OWNER_PASSWORD||'';
+ if (!email || !password) { console.log('Owner bootstrap not requested.'); return; }
+ if (password.length<12 || password.length>200 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+   console.error('Owner bootstrap configuration invalid.'); return;
+ }
+ const conn=await db.connect();
+ try {
+   await conn.query('BEGIN');
+   await conn.query('SELECT pg_advisory_xact_lock(713252,1)');
+   const existing=await conn.query('SELECT count(*)::int AS n FROM restaurantpos.staff');
+   if(existing.rows[0].n!==0) {
+     await conn.query('COMMIT');
+     console.log('Owner bootstrap skipped: staff already exist.');
+     return;
+   }
+   const r=await conn.query('INSERT INTO restaurantpos.restaurants(name) VALUES($1) RETURNING id',
+      [requiredString(process.env.RESTAURANT_NAME||'My Restaurant',140)]);
+   await conn.query('INSERT INTO restaurantpos.staff(restaurant_id,full_name,email,password_hash,role) VALUES($1,$2,$3,$4,$5)',
+     [r.rows[0].id,requiredString(process.env.OWNER_NAME||'Restaurant Owner',120),email,hashPassword(password),'owner']);
+   await conn.query('COMMIT');
+   console.log('Owner account initialized securely. Remove OWNER_PASSWORD from Render environment.');
+ } catch(error) {
+   try{await conn.query('ROLLBACK');}catch{}
+   console.error('Owner bootstrap failed:',error.message);
+ } finally {conn.release();delete process.env.OWNER_PASSWORD;}
+}
+await initializeOwnerOnce();
 server.listen(PORT,'0.0.0.0',()=>console.log(`RestaurantPOS listening on port ${PORT}`));
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{
  console.log(`RestaurantPOS shutting down on ${signal}`);
