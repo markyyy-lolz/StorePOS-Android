@@ -1,0 +1,23 @@
+name: RestaurantPOS Cloud Live Health Verification
+on:
+  push:
+    branches: [restaurantpos-native-v0.2.0]
+    paths:
+      - '.github/workflows/restaurantpos-cloud-health.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify live HTTPS + Neon health
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fLSs \
+            --max-time 120 --retry 4 --retry-delay 8 \
+            --retry-all-errors \
+            https://azurate-restaurantpos-cloud.onrender.com/api/health \
+            -o /tmp/restaurantpos-health.json
+          node -e 'const f=require("fs");const r=JSON.parse(f.readFileSync("/tmp/restaurantpos-health.json","utf8"));if(r.status!=="ok"||r.database!=="connected"){console.error("Health check failed",r);process.exit(1);}console.log("PASS: live HTTPS and Neon database connected")'
