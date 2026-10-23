@@ -1,0 +1,26 @@
+EXAMPLE ONLY — NOT A REAL CUSTOMER TRANSACTION
+
+AZURATE SAMPLE RESTAURANT
+Sample Branch • Philippines
+#R-000027 • Oct 18, 2026, 5:28 PM
+Mode: Dine-in
+PAYMENT ACKNOWLEDGMENT
+--------------------------------
+1 x Chicken Inasal  ₱179.00
+2 x Iced Tea  ₱138.00
+1 x Halo-Halo  ₱130.00
+--------------------------------
+Subtotal: ₱447.00
+Discount: ₱0.00
+Service charge: ₱0.00
+TOTAL: ₱447.00
+Payment: CASH
+Tendered: ₱500.00
+Change: ₱53.00
+--------------------------------
+NON-BIR ORDER / PAYMENT ACKNOWLEDGMENT
+NOT AN OFFICIAL RECEIPT OR SALES INVOICE
+NOT VALID FOR INPUT TAX CLAIM
+A BIR-REGISTERED INVOICE MUST BE ISSUED
+WHEN REQUIRED BY LAW. REQUEST IT SEPARATELY.
+Thank you!

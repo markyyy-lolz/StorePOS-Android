@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+ <meta name="theme-color" content="#1769e0"><title>RestaurantPOS Cloud | Azurate</title>
+ <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+ <section id="login-screen" class="login-screen" hidden>
+  <div class="login-card">
+   <div class="brand-icon">R<span>+</span></div>
+   <div class="login-eyebrow">AZURATE SOFTWARE SOLUTIONS</div>
+   <h1>RestaurantPOS <span>Cloud</span></h1>
+   <p>Welcome back. Sign in to manage your restaurant.</p>
+   <form id="login-form">
+    <label>Email address<input id="login-email" type="email" autocomplete="username" required placeholder="owner@restaurant.com"></label>
+    <label>Password<input id="login-password" type="password" autocomplete="current-password" required placeholder="Enter your password"></label>
+    <button type="submit" class="primary full" id="login-submit">Sign in securely →</button>
+   </form>
+   <div id="login-error" class="error" role="alert"></div>
+   <div class="login-note">Protected cloud access • Neon PostgreSQL</div>
+  </div>
+ </section>
+ <div id="app" class="app-shell" hidden>
+  <aside class="sidebar">
+   <div class="brand"><span class="brand-icon">R<span>+</span></span><span><strong>RestaurantPOS</strong><small>AZURATE CLOUD</small></span></div>
+   <div class="location-pill"><span class="location-dot"></span><span id="sidebar-store">Your Restaurant</span></div>
+   <nav class="nav" aria-label="Main menu">
+    <button class="nav-item active" data-page="dashboard"><span class="nav-icon">▦</span>Overview</button>
+    <button class="nav-item" data-page="pos"><span class="nav-icon">▣</span>Point of Sale</button>
+    <button class="nav-item" data-page="orders"><span class="nav-icon">≡</span>Orders</button>
+    <button class="nav-item" data-page="kitchen"><span class="nav-icon">♨</span>Kitchen Display</button>
+    <button class="nav-item" data-page="tables"><span class="nav-icon">▤</span>Dining Tables</button>
+    <div class="nav-title">MANAGEMENT</div>
+    <button class="nav-item" data-page="menu"><span class="nav-icon">◈</span>Menu Manager</button>
+    <button class="nav-item" data-page="reports"><span class="nav-icon">▥</span>Reports</button>
+    <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span>Settings</button>
+   </nav>
+   <div class="side-bottom"><div class="cloud-line"><span class="location-dot"></span> Neon Cloud Database</div><div class="small-muted">RestaurantPOS v0.1.0</div></div>
+  </aside>
+  <div class="main-shell">
+   <header class="topbar"><div class="topbar-left"><button class="menu-toggle" id="menu-toggle" aria-label="Open navigation">☰</button><div class="breadcrumbs">RestaurantPOS <span>/</span> <strong id="breadcrumb">Overview</strong></div></div><div class="topbar-right"><span class="today-date" id="today-date"></span><span class="role-pill" id="role-pill">Owner</span><button class="account" id="logout" title="Sign out"><span id="avatar">A</span><span id="staff-name">Account</span><b>↪</b></button></div></header>
+   <main id="content" class="content" aria-live="polite"><div class="loading">Loading your dashboard…</div></main>
+  </div>
+ </div>
+ <div id="toast" class="toast" role="status"></div>
+ <dialog id="modal"><button class="modal-close" id="modal-close" aria-label="Close dialog">×</button><div id="modal-body"></div></dialog>
+ <div id="print-area"><pre id="receipt-print"></pre></div>
+ <script type="module" src="/app.js"></script>
+</body>
+</html>

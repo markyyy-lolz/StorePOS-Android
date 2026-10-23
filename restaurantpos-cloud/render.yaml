@@ -1,0 +1,23 @@
+# Review Render pricing before applying this deployment blueprint.
+# A continuously available paid instance is recommended for POS operations.
+services:
+  - type: web
+    name: azurate-restaurantpos-cloud
+    runtime: node
+    region: singapore
+    plan: starter
+    buildCommand: npm install --omit=dev --no-audit --no-fund
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: PAYMONGO_SECRET_KEY
+        sync: false
+      - key: PAYMONGO_WEBHOOK_SECRET
+        sync: false

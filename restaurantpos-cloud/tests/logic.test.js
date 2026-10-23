@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {calculateTotals,minorFromPesos,hashPassword,verifyPassword,receiptText,requiredString,sessionToken,tokenHash} from '../lib.js';
+const item={id:'a',name:'Chicken Inasal',price_minor:15900,active:true};
+const menu=new Map([['a',item]]);
+test('parses PHP prices using centavo precision',()=>{assert.equal(minorFromPesos('159.50'),15950);assert.equal(minorFromPesos('0'),0);assert.throws(()=>minorFromPesos('12.345'));assert.throws(()=>minorFromPesos('-1'));assert.throws(()=>minorFromPesos('1000000.01')); });
+test('calculates server-side totals and service charges',()=>{const t=calculateTotals([{menu_item_id:'a',quantity:2}],menu,1000,5);assert.deepEqual([t.subtotal_minor,t.discount_minor,t.service_charge_minor,t.total_minor],[31800,1000,1540,32340]);});
+test('rejects invalid quantities, discounts and mismatched products',()=>{assert.throws(()=>calculateTotals([{menu_item_id:'a',quantity:100}],menu));assert.throws(()=>calculateTotals([{menu_item_id:'a',quantity:1}],menu,15901));assert.throws(()=>calculateTotals([{menu_item_id:'other',quantity:1}],menu));});
+test('scrypt hashes use randomized salts and verify passwords',()=>{const a=hashPassword('MySampleSecret123!');const b=hashPassword('MySampleSecret123!');assert.notEqual(a,b);assert.equal(verifyPassword('MySampleSecret123!',a),true);assert.equal(verifyPassword('wrong',a),false);assert.equal(verifyPassword('anything','broken'),false);});
+test('session hashes hide raw tokens',()=>{const tok=sessionToken();assert.equal(tok.length,64);assert.notEqual(tok,tokenHash(tok));});
+test('receipt is unequivocally marked non-BIR',()=>{const slip=receiptText({restaurant:{name:'Cafe Azurate',address:'Bulacan'},order:{order_number:1,created_at:'2026-10-18T02:00:00Z',service_type:'dine_in',status:'paid',subtotal_minor:15900,discount_minor:0,service_charge_minor:0,total_minor:15900},items:[{item_name:'Chicken Inasal',quantity:1,line_total_minor:15900}],payment:{method:'cash',tendered_minor:20000,change_minor:4100}});assert.match(slip,/NOT AN OFFICIAL RECEIPT OR SALES INVOICE/);assert.match(slip,/PAYMENT ACKNOWLEDGMENT/);assert.match(slip,/₱159\.00/);assert.match(slip,/₱41\.00/);});
+test('required strings cannot be blank',()=>{assert.throws(()=>requiredString('  '));assert.equal(requiredString('  Demo Restaurant  '),'Demo Restaurant');});
